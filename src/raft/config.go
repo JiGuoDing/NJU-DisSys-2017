@@ -41,17 +41,26 @@ type config struct {
 	// 用于测试的 testing.T 实例，提供日志和测试失败时的报告。
 	t *testing.T
 	// 一个网络模拟器，用于模拟节点之间的通信。
-	net       *labrpc.Network
-	n         int
-	done      int32 // tell internal threads to die
-	rafts     []*Raft
-	applyErr  []string // from apply channel readers
-	connected []bool   // whether each server is on the net
-	saved     []*Persister
-	endnames  [][]string    // the port file names each sends to
-	logs      []map[int]int // copy of each server's committed entries
+	net *labrpc.Network
+	// Raft集群中的节点数量
+	n int
+	// 指示测试是否完成
+	done int32 // tell internal threads to die
+	// 存储每个Raft实例的指针
+	rafts []*Raft
+	// 存储每个Raft节点的应用错误信息
+	applyErr []string // from apply channel readers
+	// 存储每个Raft节点是否已连接到网络的状态
+	connected []bool // whether each server is on the net
+	// 存储每个Raft节点的持久化状态
+	saved []*Persister
+	// 存储每个Raft节点发送的端口文件名
+	endnames [][]string // the port file names each sends to
+	// 存储每个Raft节点的已提交条目副本
+	logs []map[int]int // copy of each server's committed entries
 }
 
+// 创建并初始化一个config结构体，用于模拟 Raft 集群。
 func make_config(t *testing.T, n int, unreliable bool) *config {
 	runtime.GOMAXPROCS(4)
 	cfg := &config{}
@@ -84,6 +93,8 @@ func make_config(t *testing.T, n int, unreliable bool) *config {
 }
 
 // shut down a Raft server but save its persistent state.
+//
+// 关闭一个Raft服务器但保存其持久化状态。
 func (cfg *config) crash1(i int) {
 	cfg.disconnect(i)
 	cfg.net.DeleteServer(i) // disable client connections to the server.
@@ -119,6 +130,8 @@ func (cfg *config) crash1(i int) {
 // allocate new outgoing port file names, and a new
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
+//
+// 启动或重启一个Raft服务器
 func (cfg *config) start1(i int) {
 	cfg.crash1(i)
 
@@ -198,6 +211,7 @@ func (cfg *config) start1(i int) {
 	cfg.net.AddServer(i, srv)
 }
 
+// 清理所有的Raft服务器
 func (cfg *config) cleanup() {
 	for i := 0; i < len(cfg.rafts); i++ {
 		if cfg.rafts[i] != nil {
@@ -208,6 +222,8 @@ func (cfg *config) cleanup() {
 }
 
 // attach server i to the net.
+//
+// 使一个服务器连接网络
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
 
@@ -231,6 +247,8 @@ func (cfg *config) connect(i int) {
 }
 
 // detach server i from the net.
+//
+// 断开一个服务器到网络的连接
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
 
@@ -267,6 +285,8 @@ func (cfg *config) setlongreordering(longrel bool) {
 
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
+//
+// 检查是否有且仅有一个Leader
 func (cfg *config) checkOneLeader() int {
 	for iters := 0; iters < 10; iters++ {
 		time.Sleep(500 * time.Millisecond)
@@ -298,6 +318,8 @@ func (cfg *config) checkOneLeader() int {
 }
 
 // check that everyone agrees on the term.
+//
+// 检查所有服务器是否对term达成一致
 func (cfg *config) checkTerms() int {
 	term := -1
 	for i := 0; i < cfg.n; i++ {
@@ -314,6 +336,8 @@ func (cfg *config) checkTerms() int {
 }
 
 // check that there's no leader
+//
+// 检查是否有任何服务器认为自己是Leader
 func (cfg *config) checkNoLeader() {
 	for i := 0; i < cfg.n; i++ {
 		if cfg.connected[i] {
@@ -326,6 +350,8 @@ func (cfg *config) checkNoLeader() {
 }
 
 // how many servers think a log entry is committed?
+//
+// 统计多少个服务器认为某个日志条目已提交
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	cmd := -1
@@ -352,6 +378,8 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 // wait for at least n servers to commit.
 // but don't wait forever.
+//
+// 等待至少n个服务器提交日志条目
 func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 	to := 10 * time.Millisecond
 	for iters := 0; iters < 30; iters++ {
@@ -389,6 +417,8 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // same value, since nCommitted() checks this,
 // as do the threads that read from applyCh.
 // returns index.
+//
+// 执行一次完整的日志条目提交过程，确保所有预期的服务器都达成一致
 func (cfg *config) one(cmd int, expectedServers int) int {
 	t0 := time.Now()
 	starts := 0

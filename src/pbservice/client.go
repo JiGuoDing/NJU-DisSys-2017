@@ -1,11 +1,13 @@
 package pbservice
 
-import "disEx02.jgd/src/viewservice"
-import "net/rpc"
-import "fmt"
+import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"net/rpc"
 
-import "crypto/rand"
-import "math/big"
+	"disEx02.jgd/src/viewservice"
+)
 
 type Clerk struct {
 	vs *viewservice.Clerk
@@ -28,7 +30,6 @@ func MakeClerk(vshost string, me string) *Clerk {
 	return ck
 }
 
-//
 // call() sends an RPC to the rpcname handler on server srv
 // with arguments args, waits for the reply, and leaves the
 // reply in reply. the reply argument should be a pointer
@@ -44,7 +45,6 @@ func MakeClerk(vshost string, me string) *Clerk {
 //
 // please use call() to send all RPCs, in client.go and server.go.
 // please don't change this function.
-//
 func call(srv string, rpcname string,
 	args interface{}, reply interface{}) bool {
 	c, errx := rpc.Dial("unix", srv)
@@ -62,13 +62,11 @@ func call(srv string, rpcname string,
 	return false
 }
 
-//
 // fetch a key's value from the current primary;
 // if they key has never been set, return "".
 // Get() must keep trying until it either the
 // primary replies with the value or the primary
 // says the key doesn't exist (has never been Put().
-//
 func (ck *Clerk) Get(key string) string {
 
 	// Your code here.
@@ -76,26 +74,20 @@ func (ck *Clerk) Get(key string) string {
 	return "???"
 }
 
-//
 // send a Put or Append RPC
-//
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	// Your code here.
 }
 
-//
 // tell the primary to update key's value.
 // must keep trying until it succeeds.
-//
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
 
-//
 // tell the primary to append to key's value.
 // must keep trying until it succeeds.
-//
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
 }
