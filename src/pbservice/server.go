@@ -1,18 +1,19 @@
 package pbservice
 
-import "net"
-import "fmt"
-import "net/rpc"
-import "log"
-import "time"
-import "viewservice"
-import "sync"
-import "sync/atomic"
-import "os"
-import "syscall"
-import "math/rand"
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"net"
+	"net/rpc"
+	"os"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 
-
+	"disEx02.jgd/src/viewservice"
+)
 
 type PBServer struct {
 	mu         sync.Mutex
@@ -24,7 +25,6 @@ type PBServer struct {
 	// Your declarations here.
 }
 
-
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 
 	// Your code here.
@@ -32,22 +32,18 @@ func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
 	return nil
 }
 
-
 func (pb *PBServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) error {
 
 	// Your code here.
 
-
 	return nil
 }
 
-
-//
 // ping the viewserver periodically.
 // if view changed:
-//   transition to new view.
-//   manage transfer of state from primary to new backup.
 //
+//	transition to new view.
+//	manage transfer of state from primary to new backup.
 func (pb *PBServer) tick() {
 
 	// Your code here.
@@ -77,7 +73,6 @@ func (pb *PBServer) setunreliable(what bool) {
 func (pb *PBServer) isunreliable() bool {
 	return atomic.LoadInt32(&pb.unreliable) != 0
 }
-
 
 func StartServer(vshost string, me string) *PBServer {
 	pb := new(PBServer)

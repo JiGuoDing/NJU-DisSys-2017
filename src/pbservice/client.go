@@ -1,12 +1,11 @@
 package pbservice
 
-import "viewservice"
+import "disEx02.jgd/src/viewservice"
 import "net/rpc"
 import "fmt"
 
 import "crypto/rand"
 import "math/big"
-
 
 type Clerk struct {
 	vs *viewservice.Clerk
@@ -28,7 +27,6 @@ func MakeClerk(vshost string, me string) *Clerk {
 
 	return ck
 }
-
 
 //
 // call() sends an RPC to the rpcname handler on server srv

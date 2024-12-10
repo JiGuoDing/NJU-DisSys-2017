@@ -20,7 +20,7 @@ package raft
 import (
 	"sync"
 
-	"labrpc"
+	"disEx02.jgd/src/labrpc"
 )
 
 // import "bytes"
