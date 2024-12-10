@@ -8,16 +8,26 @@ package raft
 // test with the original before submitting.
 //
 
-import "labrpc"
-import "log"
-import "sync"
-import "testing"
-import "runtime"
-import crand "crypto/rand"
-import "encoding/base64"
-import "sync/atomic"
-import "time"
-import "fmt"
+/*
+	为 Raft 协议的测试环境提供支持的配置文件。
+	定义了一个用于测试 Raft 协议和 KV 系统的配置结构体 config。
+	并提供了一些辅助方法来模拟 Raft 节点的启动、崩溃、网络连接、日志提交等操作。
+*/
+
+import (
+	"log"
+	"runtime"
+	"sync"
+	"testing"
+
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"disEx02.jgd/src/labrpc"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -27,8 +37,10 @@ func randstring(n int) string {
 }
 
 type config struct {
-	mu        sync.Mutex
-	t         *testing.T
+	mu sync.Mutex
+	// 用于测试的 testing.T 实例，提供日志和测试失败时的报告。
+	t *testing.T
+	// 一个网络模拟器，用于模拟节点之间的通信。
 	net       *labrpc.Network
 	n         int
 	done      int32 // tell internal threads to die
@@ -102,13 +114,11 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
-//
 // start or re-start a Raft.
 // if one already exists, "kill" it first.
 // allocate new outgoing port file names, and a new
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
-//
 func (cfg *config) start1(i int) {
 	cfg.crash1(i)
 
