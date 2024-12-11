@@ -29,8 +29,13 @@ import (
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make().
+//
+// ApplyMsg是Raft节点与上层应用之间通信的桥梁。
+// 确保了日志条目的正确执行和状态的同步
 type ApplyMsg struct {
-	Index       int
+	// 日志条目索引
+	Index int
+	// 实际的命令
 	Command     interface{}
 	UseSnapshot bool   // ignore for lab2; only used in lab3
 	Snapshot    []byte // ignore for lab2; only used in lab3
@@ -38,15 +43,20 @@ type ApplyMsg struct {
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
-	mu        sync.Mutex
-	peers     []*labrpc.ClientEnd
+	mu sync.Mutex
+	// 存储所有Raft节点的客户端连接
+	peers []*labrpc.ClientEnd
+	// 用于持久化Raft节点的状态
 	persister *Persister
-	me        int // index into peers[]
+	// 当前节点在peers列表中的索引
+	me int // index into peers[]
 
 	// Your data here.
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// 当前任期
+	currentTerm int
 }
 
 // return currentTerm and whether this server
