@@ -20,7 +20,10 @@ package raft
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
+	"math/rand"
 	"sync"
+	"time"
 
 	"disEx02.jgd/src/labrpc"
 )
@@ -29,10 +32,18 @@ import (
 // import "encoding/gob"
 
 // 常量定义
-// 选举超时时间上下限（ms）
 const (
+	// Raft server的角色
+	leader    = 0
+	candidate = 1
+	follower  = 2
+
+	// 选举超时时间上下限（ms）
 	MinElectionTimeout = 150
 	MaxElectionTimeout = 300
+
+	// 心跳周期
+	HeartBeatInterval = 50
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -65,10 +76,13 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// 该raft server的状态
-	rState RaftState
+	RaftState
 }
 
 type RaftState struct {
+	// PERSISTENT STATE ON ALL SERVERS: (Updated on stable storage before responding to RPCs)
+	// 回复RPCs之前要先持久化存储起来，防止crash或者restart后需要重新读取
+
 	// latest term server has seen (initialized to 0 on first boot, increases monotonically)
 	currentTerm int
 
@@ -76,23 +90,57 @@ type RaftState struct {
 	votedFor int
 
 	// log entries; each entry contains command for state machine, and term when entry was received by leader (first index is 1)
-	log []string
+	logs []LogEntry
 
-	// VOLATILE STATE ALL SERVERS
+	// ------------------------------------------------------------
+	// VOLATILE STATE ALL SERVERS:
+
+	// the role this raft server is currently in
+	role int
+
+	// the count of votes received from self and other servers
+	voteCnt int
+
+	// the time to record
+	timeStamp time.Time
 
 	// index of highest log entry known to be committed (initialized to 0, increases monotonically)
-	commitIndex int
+	// commitIndex int
 
 	// index of highest log entry applied to state machine (initialized to 0, increases monotonically)
-	lastApplied int
+	// lastApplied int
 
-	// VOLATILE STATE ON LEADERS
+	// ------------------------------------------------------------
+	// VOLATILE STATE ON LEADERS: (Reinitialized after election)
 
 	// for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
-	nextIndex []int
+	// nextIndex []int
 
 	// for each server, index of the highest log entry known to be replicated on server (initialized to 0, increases monotonically)
-	matchIndex []int
+	// matchIndex []int
+}
+
+type LogEntry struct {
+	Term    int
+	Command interface{}
+}
+
+type AppendEntriesArgs struct {
+	Term     int
+	LeaderID int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+}
+
+func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
 }
 
 // return currentTerm and whether this server
@@ -111,12 +159,13 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here.
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
@@ -127,8 +176,11 @@ func (rf *Raft) readPersist(data []byte) {
 	// Example:
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
-	d.Decode(&rf.xxx)
-	d.Decode(&rf.yyy)
+
+	// 解码出持久化状态
+	d.Decode(&rf.currentTerm)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.logs)
 }
 
 // example RequestVote RPC arguments structure.
@@ -136,13 +188,13 @@ type RequestVoteArgs struct {
 	// Your data here.
 
 	// candidate's term
-	term int
+	Term int
 	// candidate requesting vote
-	candidateID int
+	CandidateID int
 	// index of candidate's last log entry
-	lastLogIndex int
+	// LastLogIndex int
 	// term of candidate's last log entry
-	lastLogTerm int
+	// lastLogTerm int
 }
 
 // example RequestVote RPC reply structure.
@@ -150,14 +202,77 @@ type RequestVoteReply struct {
 	// Your data here.
 
 	// currentTerm, for candidate to update itself
-	term int
+	Term int
 	// true means candidate received vote
-	voteGranted bool
+	VoteGranted bool
 }
 
 // example RequestVote RPC handler.
+// func (rf *Raft) RequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) {
+// 	// Your code here.
+// 	ok := rf.sendRequestVote(server, args, reply)
+// 	// false means the server couldn't be contacted
+// 	if !ok {
+// 		return
+// 	}
+
+// 	rf.mu.Lock()
+// 	defer rf.mu.Unlock()
+
+// 	// 收到更新的Term的消息，以follower身份加入新Term
+// 	if reply.Term > rf.currentTerm {
+// 		rf.Donw2Follower4NewTerm(reply.Term)
+// 		return
+// 	}
+
+// 	// 目标server拒绝投票或者当前server非candidate
+// 	if !reply.VoteGranted || rf.role != candidate {
+// 		return
+// 	}
+
+// 	// 票数加1
+// 	rf.voteCnt++
+
+// 	if rf.role == leader {
+// 		return
+// 	}
+
+// 	// 不是leader且获得多余半数的票，成为新Term的leader
+// 	if rf.voteCnt > len(rf.peers)/2 {
+// 		rf.role = leader
+// 		fmt.Printf("server %d becomes the new leader of term %d\n", rf.me, rf.currentTerm)
+// 	}
+// }
+
+// 处理投票请求
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here.
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	fmt.Printf("server %d received RequestVote from server %d\n", rf.me, args.CandidateID)
+	reply.Term = rf.currentTerm
+
+	// 收到来自过时Term的投票请求
+	if args.Term < rf.currentTerm {
+		fmt.Printf("server %d rejects RequestVote from server %d because it's term is outdated\n", rf.me, args.CandidateID)
+		reply.VoteGranted = false
+		return
+	}
+
+	// 收到来自更新的Term的投票请求（存在更新的Term）
+	if args.Term > rf.currentTerm {
+		fmt.Printf("server %d receices RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
+		// 加入新Term
+		rf.Donw2Follower4NewTerm(args.Term)
+	}
+
+	// 为该server投票
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateID {
+		rf.votedFor = args.CandidateID
+		reply.VoteGranted = true
+		rf.role = follower
+		rf.timeStamp = time.Now()
+	}
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -224,9 +339,83 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here.
+	rf.role = follower
+	rf.voteCnt = 0
+	rf.votedFor = -1 // -1表示没有投票
+	rf.currentTerm = 0
+	rf.timeStamp = time.Now()
+	rf.logs = append(rf.logs, LogEntry{
+		Term:    0,
+		Command: nil,
+	})
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	go rf.ticker()
+
 	return rf
+}
+
+func (rf *Raft) ticker() {
+	//  生成随机electionTimeout
+	// time.Duration(n)返回n纳秒的时间间隔
+	electionTimeout := getElectionTimeout()
+	fmt.Printf("server %d set a electionTimeout = %d\n", rf.me, electionTimeout)
+
+	for {
+		rf.mu.Lock()
+		if elapsedTime := time.Since(rf.timeStamp); rf.role != leader && elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
+			fmt.Printf("electionTimeout ran out, server %d starting a new election\n", rf.me)
+			// 开始选举
+			go rf.election()
+		}
+		rf.mu.Unlock()
+
+		// 重置electionTimeout
+		electionTimeout = getElectionTimeout()
+		// 随机延迟一段时间再开始选举延时流动(50-200ms)
+		time.Sleep(time.Duration(rand.Intn(150)+50) * time.Millisecond)
+	}
+}
+
+func (rf *Raft) election() {
+
+	rf.mu.Lock()
+	fmt.Printf("server %d starting a new election\n", rf.me)
+	rf.role = candidate
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+	rf.voteCnt = 1
+	rf.timeStamp = time.Now()
+	rf.persist()
+	rf.mu.Unlock()
+
+	reqArgs := RequestVoteArgs{
+		Term:        rf.currentTerm,
+		CandidateID: rf.me,
+	}
+
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		reqReply := RequestVoteReply{}
+		go rf.sendRequestVote(i, reqArgs, &reqReply)
+	}
+}
+
+// 接收到最新Term的消息，以follower身份加入新Term
+func (rf *Raft) Donw2Follower4NewTerm(NewTerm int) {
+	rf.currentTerm = NewTerm
+	rf.role = follower
+	rf.votedFor = -1
+	rf.voteCnt = 0
+	rf.timeStamp = time.Now()
+	rf.persist()
+}
+
+// 生成随机选举超时时间
+func getElectionTimeout() int {
+	return rand.Intn(MaxElectionTimeout-MinElectionTimeout) + MinElectionTimeout
 }
