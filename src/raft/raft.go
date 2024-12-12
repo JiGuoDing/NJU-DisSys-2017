@@ -261,7 +261,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	// 收到来自更新的Term的投票请求（存在更新的Term）
 	if args.Term > rf.currentTerm {
-		fmt.Printf("server %d receices RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
+		fmt.Printf("server %d receives RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
 		// 加入新Term
 		rf.Donw2Follower4NewTerm(args.Term)
 	}
@@ -366,7 +366,7 @@ func (rf *Raft) ticker() {
 	for {
 		rf.mu.Lock()
 		if elapsedTime := time.Since(rf.timeStamp); rf.role != leader && elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
-			fmt.Printf("electionTimeout ran out, server %d starting a new election\n", rf.me)
+			fmt.Printf("server %d's electionTimeout ran out, starting a new election\n", rf.me)
 			// 开始选举
 			go rf.election()
 		}
@@ -397,11 +397,40 @@ func (rf *Raft) election() {
 	}
 
 	for i := 0; i < len(rf.peers); i++ {
+		rf.mu.Lock()
 		if i == rf.me {
+			rf.mu.Unlock()
 			continue
 		}
 		reqReply := RequestVoteReply{}
-		go rf.sendRequestVote(i, reqArgs, &reqReply)
+		go func() {
+			defer rf.mu.Unlock()
+			ok := rf.sendRequestVote(i, reqArgs, &reqReply)
+			if !ok {
+				fmt.Printf("server %d couldn'g be contacted\n", i)
+				return
+			}
+
+			if reqReply.Term > rf.currentTerm {
+				rf.Donw2Follower4NewTerm(reqReply.Term)
+				return
+			}
+
+			if !reqReply.VoteGranted || rf.role != candidate {
+				return
+			}
+
+			rf.voteCnt++
+
+			if rf.role == leader {
+				return
+			}
+
+			if rf.voteCnt > len(rf.peers)/2 {
+				rf.Up2Leader()
+
+			}
+		}()
 	}
 }
 
@@ -412,7 +441,18 @@ func (rf *Raft) Donw2Follower4NewTerm(NewTerm int) {
 	rf.votedFor = -1
 	rf.voteCnt = 0
 	rf.timeStamp = time.Now()
+	fmt.Printf("server %d joins term %d as follower\n", rf.me, NewTerm)
 	rf.persist()
+}
+
+// 成为leader
+func (rf *Raft) Up2Leader() {
+	if rf.role != candidate {
+		return
+	}
+	rf.role = leader
+	rf.timeStamp = time.Now()
+	fmt.Printf("server %d becomes leader of term %d\n", rf.me, rf.currentTerm)
 }
 
 // 生成随机选举超时时间
