@@ -12,8 +12,8 @@ package raft
 import "sync"
 
 /*
-	Persister提供持久化存储服务，用于保存和恢复 Raft 节点的状态数据。
-	Raft 协议中的一个关键问题是如何保证数据持久性，以确保在节点崩溃或重启后可以恢复其状态。
+Persister提供持久化存储服务，用于保存和恢复 Raft 节点的状态数据。
+Raft 协议中的一个关键问题是如何保证数据持久性，以确保在节点崩溃或重启后可以恢复其状态。
 */
 type Persister struct {
 	mu        sync.Mutex
@@ -40,14 +40,14 @@ func (ps *Persister) Copy() *Persister {
 	return np
 }
 
-// 保存raft状态
+// 以stream形式保存raft状态
 func (ps *Persister) SaveRaftState(data []byte) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	ps.raftstate = data
 }
 
-// 读取raft状态
+// 以stream读取raft状态并返回
 func (ps *Persister) ReadRaftState() []byte {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()

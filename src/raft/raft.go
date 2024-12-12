@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"bytes"
+	"encoding/gob"
 	"sync"
 
 	"disEx02.jgd/src/labrpc"
@@ -25,6 +27,13 @@ import (
 
 // import "bytes"
 // import "encoding/gob"
+
+// 常量定义
+// 选举超时时间上下限（ms）
+const (
+	MinElectionTimeout = 150
+	MaxElectionTimeout = 300
+)
 
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -55,8 +64,35 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
-	// 当前任期
+	// 该raft server的状态
+	rState RaftState
+}
+
+type RaftState struct {
+	// latest term server has seen (initialized to 0 on first boot, increases monotonically)
 	currentTerm int
+
+	// candidateId that received a vote in current term (or null if none)
+	votedFor int
+
+	// log entries; each entry contains command for state machine, and term when entry was received by leader (first index is 1)
+	log []string
+
+	// VOLATILE STATE ALL SERVERS
+
+	// index of highest log entry known to be committed (initialized to 0, increases monotonically)
+	commitIndex int
+
+	// index of highest log entry applied to state machine (initialized to 0, increases monotonically)
+	lastApplied int
+
+	// VOLATILE STATE ON LEADERS
+
+	// for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
+	nextIndex []int
+
+	// for each server, index of the highest log entry known to be replicated on server (initialized to 0, increases monotonically)
+	matchIndex []int
 }
 
 // return currentTerm and whether this server
@@ -84,23 +120,39 @@ func (rf *Raft) persist() {
 }
 
 // restore previously persisted state.
+//
+// 以stream形式读入，需要解码器解码
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.xxx)
+	d.Decode(&rf.yyy)
 }
 
 // example RequestVote RPC arguments structure.
 type RequestVoteArgs struct {
 	// Your data here.
+
+	// candidate's term
+	term int
+	// candidate requesting vote
+	candidateID int
+	// index of candidate's last log entry
+	lastLogIndex int
+	// term of candidate's last log entry
+	lastLogTerm int
 }
 
 // example RequestVote RPC reply structure.
 type RequestVoteReply struct {
 	// Your data here.
+
+	// currentTerm, for candidate to update itself
+	term int
+	// true means candidate received vote
+	voteGranted bool
 }
 
 // example RequestVote RPC handler.
