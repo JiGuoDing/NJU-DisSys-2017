@@ -70,6 +70,8 @@ type Raft struct {
 	persister *Persister
 	// 当前节点在peers列表中的索引
 	me int // index into peers[]
+	// 是否被终结
+	// dead bool
 
 	// Your data here.
 	// Look at the paper's Figure 2 for a description of what
@@ -136,6 +138,29 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	fmt.Printf("server %d received AppendEntries from leader %d\n", rf.me, args.LeaderID)
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// 接收到AppendEntry的服务器的Term大于发送发送AppendEntry的Term，则拒绝确认领导权
+	if rf.currentTerm > args.Term {
+		fmt.Printf("server %d in term %d received AppendEntries from old term %d\n", rf.me, rf.currentTerm, args.Term)
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
+	}
+
+	// 接收到AppendEntry的服务器的Term小于发送AppendEntry的server的Term，则加入新的Term
+	if rf.currentTerm < args.Term {
+		rf.Donw2Follower4NewTerm(args.Term)
+	}
+
+	// 同一个Term里leader发来的AppendEntry则视为测活心跳
+	rf.timeStamp = time.Now()
+	reply.Term = args.Term
+	reply.Success = true
+	fmt.Printf("server %d is alive -> leader %d\n", rf.me, args.LeaderID)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -150,6 +175,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here.
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = rf.currentTerm
+	isleader = rf.role == leader
 	return term, isleader
 }
 
@@ -159,12 +188,17 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here.
 	// Example:
+	fmt.Printf("server %d is persisting state\n", rf.me)
 	w := new(bytes.Buffer)
 	e := gob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.logs)
 	data := w.Bytes()
+	if data == nil {
+		fmt.Printf("持久层数据为空，无法保存\n")
+		return
+	}
 	rf.persister.SaveRaftState(data)
 }
 
@@ -174,13 +208,23 @@ func (rf *Raft) persist() {
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	// Example:
+
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		fmt.Printf("持久层数据为空，无法恢复\n")
+		return
+	}
+
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
+
+	fmt.Printf("server %d is reloading persistent state\n", rf.me)
 
 	// 解码出持久化状态
 	d.Decode(&rf.currentTerm)
 	d.Decode(&rf.votedFor)
 	d.Decode(&rf.logs)
+
+	fmt.Printf("server %d 's reloaded term is \n", rf.currentTerm)
 }
 
 // example RequestVote RPC arguments structure.
@@ -261,7 +305,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	// 收到来自更新的Term的投票请求（存在更新的Term）
 	if args.Term > rf.currentTerm {
-		fmt.Printf("server %d receives RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
+		fmt.Printf("server %d received RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
 		// 加入新Term
 		rf.Donw2Follower4NewTerm(args.Term)
 	}
@@ -320,6 +364,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	fmt.Printf("server %d is killed\n", rf.me)
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -339,18 +384,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here.
+	rf.mu.Lock()
 	rf.role = follower
 	rf.voteCnt = 0
 	rf.votedFor = -1 // -1表示没有投票
 	rf.currentTerm = 0
-	rf.timeStamp = time.Now()
 	rf.logs = append(rf.logs, LogEntry{
 		Term:    0,
 		Command: nil,
 	})
 
+	fmt.Printf("succeeded in initializing server %d\n", rf.me)
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.timeStamp = time.Now()
+
+	rf.mu.Unlock()
 
 	go rf.ticker()
 
@@ -364,23 +414,36 @@ func (rf *Raft) ticker() {
 	fmt.Printf("server %d set a electionTimeout = %d\n", rf.me, electionTimeout)
 
 	for {
+		// fmt.Printf("server %d's timeStamp is %s\n", rf.me, rf.timeStamp)
 		rf.mu.Lock()
-		if elapsedTime := time.Since(rf.timeStamp); rf.role != leader && elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
-			fmt.Printf("server %d's electionTimeout ran out, starting a new election\n", rf.me)
-			// 开始选举
-			go rf.election()
-		}
+		elapsedTime := time.Since(rf.timeStamp)
 		rf.mu.Unlock()
 
-		// 重置electionTimeout
-		electionTimeout = getElectionTimeout()
-		// 随机延迟一段时间再开始选举延时流动(50-200ms)
-		time.Sleep(time.Duration(rand.Intn(150)+50) * time.Millisecond)
+		switch rf.role {
+		case leader:
+			fmt.Printf("leader %d's heartBeatTimeout ran out\n", rf.me)
+			if elapsedTime >= time.Duration(HeartBeatInterval)*time.Millisecond {
+				// 发送心跳
+				go rf.HeartBeat()
+			}
+
+		case follower, candidate:
+			if elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
+				fmt.Printf("server %d's electionTimeout ran out\n", rf.me)
+				// 开始选举
+				go rf.election()
+			}
+			// // 重置electionTimeout
+			// electionTimeout = getElectionTimeout()
+			// // 随机延迟一段时间再开始选举延时流动(50-200ms)
+			// time.Sleep(time.Duration(rand.Intn(150)+50) * time.Millisecond)
+		}
 	}
 }
 
 func (rf *Raft) election() {
 
+	// 持久化存储状态
 	rf.mu.Lock()
 	fmt.Printf("server %d starting a new election\n", rf.me)
 	rf.role = candidate
@@ -397,17 +460,16 @@ func (rf *Raft) election() {
 	}
 
 	for i := 0; i < len(rf.peers); i++ {
-		rf.mu.Lock()
 		if i == rf.me {
-			rf.mu.Unlock()
 			continue
 		}
-		reqReply := RequestVoteReply{}
 		go func() {
+			reqReply := RequestVoteReply{}
+			rf.mu.Lock()
 			defer rf.mu.Unlock()
 			ok := rf.sendRequestVote(i, reqArgs, &reqReply)
 			if !ok {
-				fmt.Printf("server %d couldn'g be contacted\n", i)
+				fmt.Printf("server %d couldn'g be contacted with requestVote\n", i)
 				return
 			}
 
@@ -428,13 +490,68 @@ func (rf *Raft) election() {
 
 			if rf.voteCnt > len(rf.peers)/2 {
 				rf.Up2Leader()
-
 			}
 		}()
 	}
+
+	// 更新时间戳
+	rf.mu.Lock()
+	rf.timeStamp = time.Now()
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) HeartBeat() {
+
+	// 持久化存储状态
+	rf.mu.Lock()
+	rf.role = candidate
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+	rf.voteCnt = 1
+	rf.timeStamp = time.Now()
+	rf.persist()
+	rf.mu.Unlock()
+
+	aeArgs := AppendEntriesArgs{
+		LeaderID: rf.me,
+		Term:     rf.currentTerm,
+	}
+
+	fmt.Printf("leader %d sending heartbeat to all servers\n", rf.me)
+
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+		go func() {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			aeReply := AppendEntriesReply{}
+			fmt.Printf("leader %d send heartbeat to server %d\n", rf.me, i)
+			ok := rf.sendAppendEntries(i, aeArgs, &aeReply)
+
+			if !ok {
+				fmt.Printf("server %d couldn'g be contacted with heartbeat\n", i)
+				return
+			}
+
+			// 目标server拒绝确认领导权，存在新Term，以follower身份加入新Term
+			if !aeReply.Success {
+				rf.Donw2Follower4NewTerm(aeReply.Term)
+				return
+			}
+		}()
+	}
+
+	// 更新时间戳
+	rf.mu.Lock()
+	rf.timeStamp = time.Now()
+	rf.mu.Unlock()
 }
 
 // 接收到最新Term的消息，以follower身份加入新Term
+// 在该函数的上下文要有互斥锁包围
 func (rf *Raft) Donw2Follower4NewTerm(NewTerm int) {
 	rf.currentTerm = NewTerm
 	rf.role = follower
@@ -453,6 +570,7 @@ func (rf *Raft) Up2Leader() {
 	rf.role = leader
 	rf.timeStamp = time.Now()
 	fmt.Printf("server %d becomes leader of term %d\n", rf.me, rf.currentTerm)
+	go rf.HeartBeat()
 }
 
 // 生成随机选举超时时间

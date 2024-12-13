@@ -286,10 +286,11 @@ func (cfg *config) setlongreordering(longrel bool) {
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
 //
-// 检查是否有且仅有一个Leader
+// 检查是否有且仅有一个Leader 返回最新任期内的leaderIdx
 func (cfg *config) checkOneLeader() int {
 	for iters := 0; iters < 10; iters++ {
 		time.Sleep(500 * time.Millisecond)
+		// [Term][leaderIdx...]
 		leaders := make(map[int][]int)
 		for i := 0; i < cfg.n; i++ {
 			if cfg.connected[i] {
@@ -300,6 +301,7 @@ func (cfg *config) checkOneLeader() int {
 		}
 
 		lastTermWithLeader := -1
+		// 前一个leaders是Term t内的leader, 后一个leaders是所有Term的leader
 		for t, leaders := range leaders {
 			if len(leaders) > 1 {
 				cfg.t.Fatalf("term %d has %d (>1) leaders", t, len(leaders))
