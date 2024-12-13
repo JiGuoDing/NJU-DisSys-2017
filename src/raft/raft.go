@@ -427,16 +427,13 @@ func (rf *Raft) ticker() {
 				go rf.HeartBeat()
 			}
 
+			// TODO 是否需要锁在这里？ for循环可能多次执行
 		case follower, candidate:
 			if elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
 				fmt.Printf("server %d's electionTimeout ran out\n", rf.me)
 				// 开始选举
 				go rf.election()
 			}
-			// // 重置electionTimeout
-			// electionTimeout = getElectionTimeout()
-			// // 随机延迟一段时间再开始选举延时流动(50-200ms)
-			// time.Sleep(time.Duration(rand.Intn(150)+50) * time.Millisecond)
 		}
 	}
 }
