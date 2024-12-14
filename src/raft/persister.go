@@ -9,7 +9,10 @@ package raft
 // test with the original before submitting.
 //
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 /*
 Persister提供持久化存储服务，用于保存和恢复 Raft 节点的状态数据。
@@ -44,6 +47,10 @@ func (ps *Persister) Copy() *Persister {
 func (ps *Persister) SaveRaftState(data []byte) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	if data == nil {
+		fmt.Println("WARNING: 要持久化的数据为空")
+	}
+	fmt.Println("正在持久化存储数据...")
 	ps.raftstate = data
 }
 
@@ -51,6 +58,7 @@ func (ps *Persister) SaveRaftState(data []byte) {
 func (ps *Persister) ReadRaftState() []byte {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
+	fmt.Println("正在读取持久化数据...")
 	return ps.raftstate
 }
 
