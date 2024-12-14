@@ -43,7 +43,7 @@ const (
 	MaxElectionTimeout = 300
 
 	// 心跳周期
-	HeartBeatInterval = 50
+	HeartBeatInterval = 100
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -291,10 +291,10 @@ type RequestVoteReply struct {
 
 // 处理投票请求
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
+	fmt.Printf("server %d received RequestVote from server %d\n", rf.me, args.CandidateID)
+
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	fmt.Printf("server %d received RequestVote from server %d\n", rf.me, args.CandidateID)
 	reply.Term = rf.CurrentTerm
 
 	// 收到来自过时Term的投票请求
@@ -309,11 +309,15 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		fmt.Printf("server %d received RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
 		// 加入新Term
 		rf.Donw2Follower4NewTerm(args.Term)
+		rf.VotedFor = args.CandidateID
 	}
+
+	// fmt.Printf("server %d's VotedFor is %d\n", rf.me, rf.VotedFor)
 
 	// 为该server投票
 	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
 		rf.VotedFor = args.CandidateID
+		fmt.Printf("server %d votes for server %d\n", rf.me, args.CandidateID)
 		reply.VoteGranted = true
 		rf.Role = follower
 		rf.TimeStamp = time.Now()
