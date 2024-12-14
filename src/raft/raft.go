@@ -309,7 +309,6 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		fmt.Printf("server %d received RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
 		// 加入新Term
 		rf.Donw2Follower4NewTerm(args.Term)
-		rf.TimeStamp = time.Now()
 	}
 
 	// 为该server投票
@@ -424,12 +423,14 @@ func (rf *Raft) ticker() {
 		// fmt.Printf("server %d's timeStamp is %s\n", rf.me, rf.timeStamp)
 		rf.mu.Lock()
 		if rf.dead {
+			rf.mu.Unlock()
 			return
 		}
 		elapsedTime := time.Since(rf.TimeStamp)
+		curRole := rf.Role
 		rf.mu.Unlock()
 
-		switch rf.Role {
+		switch curRole {
 		case leader:
 			if elapsedTime >= time.Duration(HeartBeatInterval)*time.Millisecond {
 				fmt.Printf("leader %d's heartBeatTimeout ran out\n", rf.me)
@@ -442,17 +443,20 @@ func (rf *Raft) ticker() {
 				go rf.HeartBeat()
 			}
 
-			// TODO 是否需要锁在这里？ for循环可能多次执行
 		case follower, candidate:
 			if elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
+				fmt.Printf("server %d's electionTimeout ran out\n", rf.me)
+				// 开始选举
+				go rf.election()
+
 				// 更新时间戳
 				rf.mu.Lock()
 				rf.TimeStamp = time.Now()
 				rf.mu.Unlock()
 
-				fmt.Printf("server %d's electionTimeout ran out\n", rf.me)
-				// 开始选举
-				go rf.election()
+				// 重置选举超时
+				electionTimeout := getElectionTimeout()
+				fmt.Printf("server %d reset a electionTimeout = %d\n", rf.me, electionTimeout)
 			}
 		}
 	}
@@ -482,14 +486,17 @@ func (rf *Raft) election() {
 		}
 		go func() {
 			reqReply := RequestVoteReply{}
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
+			// rf.mu.Lock()
+			// defer rf.mu.Unlock()
 			fmt.Printf("server %d is sending requestVote to server %d\n", rf.me, i)
 			ok := rf.sendRequestVote(i, reqArgs, &reqReply)
 			if !ok {
 				fmt.Printf("server %d couldn'g be contacted with requestVote\n", i)
 				return
 			}
+
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
 
 			if reqReply.Term > rf.CurrentTerm {
 				rf.Donw2Follower4NewTerm(reqReply.Term)
@@ -533,12 +540,15 @@ func (rf *Raft) HeartBeat() {
 			continue
 		}
 		go func() {
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
+			// rf.mu.Lock()
+			// defer rf.mu.Unlock()
 
 			aeReply := AppendEntriesReply{}
 			fmt.Printf("leader %d send heartbeat to server %d\n", rf.me, i)
 			ok := rf.sendAppendEntries(i, aeArgs, &aeReply)
+
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
 
 			if !ok {
 				fmt.Printf("server %d couldn'g be contacted with heartbeat\n", i)
@@ -559,7 +569,6 @@ func (rf *Raft) HeartBeat() {
 func (rf *Raft) Donw2Follower4NewTerm(NewTerm int) {
 	rf.CurrentTerm = NewTerm
 	rf.Role = follower
-	rf.VotedFor = -1
 	rf.VoteCnt = 0
 	rf.TimeStamp = time.Now()
 	fmt.Printf("server %d joins term %d as follower\n", rf.me, NewTerm)
