@@ -42,8 +42,8 @@ const (
 	MinElectionTimeout = 150
 	MaxElectionTimeout = 300
 
-	// 心跳周期
-	HeartBeatInterval = 100
+	// 心跳周期(ms)
+	HeartBeatInterval = 75
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -123,6 +123,7 @@ type RaftState struct {
 }
 
 type LogEntry struct {
+	Index   int
 	Term    int
 	Command interface{}
 }
@@ -151,9 +152,11 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		return
 	}
 
-	// 接收到AppendEntry的服务器的Term小于发送AppendEntry的server的Term，则加入新的Term
-	if rf.CurrentTerm < args.Term {
+	// 接收到AppendEntry的服务器的Term小于等于发送AppendEntry的leader的Term，则加入新的Term
+	// 或者同一任期的心跳来自的leader与当前server的VotedFor不同，则更改为新的leader
+	if rf.CurrentTerm < args.Term || rf.VotedFor != args.LeaderID {
 		rf.Donw2Follower4NewTerm(args.Term)
+		rf.VotedFor = args.LeaderID
 	}
 
 	// 同一个Term里leader发来的AppendEntry则视为测活心跳
@@ -397,6 +400,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.VoteCnt = 0
 	rf.VotedFor = -1 // -1表示没有投票
 	rf.CurrentTerm = 0
+	rf.dead = false
 	rf.Logs = append(rf.Logs, LogEntry{
 		Term:    0,
 		Command: nil,
@@ -423,7 +427,7 @@ func (rf *Raft) ticker() {
 	electionTimeout := getElectionTimeout()
 	fmt.Printf("server %d set a electionTimeout = %d\n", rf.me, electionTimeout)
 
-	for {
+	for !rf.dead {
 		// fmt.Printf("server %d's timeStamp is %s\n", rf.me, rf.timeStamp)
 		rf.mu.Lock()
 		if rf.dead {
@@ -447,16 +451,32 @@ func (rf *Raft) ticker() {
 				go rf.HeartBeat()
 			}
 
-		case follower, candidate:
+		case follower:
 			if elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
 				fmt.Printf("server %d's electionTimeout ran out\n", rf.me)
+				rf.mu.Lock()
+				rf.Role = candidate
+				rf.CurrentTerm += 1
+				// 更新时间戳
+				rf.TimeStamp = time.Now()
+				rf.mu.Unlock()
 				// 开始选举
 				go rf.election()
 
+				// 重置选举超时
+				electionTimeout := getElectionTimeout()
+				fmt.Printf("server %d reset a electionTimeout = %d\n", rf.me, electionTimeout)
+			}
+		case candidate:
+			if elapsedTime >= time.Duration(electionTimeout)*time.Millisecond {
+				fmt.Printf("server %d's electionTimeout ran out\n", rf.me)
 				// 更新时间戳
 				rf.mu.Lock()
+				rf.CurrentTerm += 1
 				rf.TimeStamp = time.Now()
 				rf.mu.Unlock()
+				// 开始选举
+				go rf.election()
 
 				// 重置选举超时
 				electionTimeout := getElectionTimeout()
@@ -468,11 +488,15 @@ func (rf *Raft) ticker() {
 
 func (rf *Raft) election() {
 
-	// 持久化存储状态
 	rf.mu.Lock()
+	if rf.Role != candidate {
+		rf.mu.Unlock()
+		return
+	}
+
+	// 持久化存储状态
 	fmt.Printf("server %d starting a new election\n", rf.me)
-	rf.Role = candidate
-	rf.CurrentTerm += 1
+	// rf.Role = candidate
 	rf.VotedFor = rf.me
 	rf.VoteCnt = 1
 	rf.TimeStamp = time.Now()
@@ -488,6 +512,20 @@ func (rf *Raft) election() {
 		if i == rf.me {
 			continue
 		}
+		// 已经不是candidate
+		rf.mu.Lock()
+		if rf.Role != candidate {
+			fmt.Printf("server %d is not a candidate anymore, quit election\n", rf.me)
+			rf.mu.Unlock()
+			break
+		}
+		// 已经是leader，停止发送投票请求
+		if rf.Role == leader {
+			rf.mu.Unlock()
+			break
+		}
+		rf.mu.Unlock()
+
 		go func() {
 			reqReply := RequestVoteReply{}
 			// rf.mu.Lock()
@@ -502,6 +540,7 @@ func (rf *Raft) election() {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
+			// 收到来自更新的Term的投票请求，投票给他
 			if reqReply.Term > rf.CurrentTerm {
 				rf.Donw2Follower4NewTerm(reqReply.Term)
 				return
