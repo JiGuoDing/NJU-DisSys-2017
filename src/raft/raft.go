@@ -107,19 +107,36 @@ type RaftState struct {
 	TimeStamp time.Time
 
 	// index of highest log entry known to be committed (initialized to 0, increases monotonically)
-	// commitIndex int
+	//
+	// 当前server已提交的最高日志条目索引
+	CommitIndex int
 
 	// index of highest log entry applied to state machine (initialized to 0, increases monotonically)
-	// lastApplied int
+	//
+	// 已应用到本地状态机的最高日志条目的索引
+	LastApplied int
 
 	// ------------------------------------------------------------
 	// VOLATILE STATE ON LEADERS: (Reinitialized after election)
 
 	// for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
-	// nextIndex []int
+	//
+	// 存储为每个follower准备发送的下一条日志条目的索引
+	//
+	// NextIndex[N] = x 表示下一次将向N节点发送索引为x的日志条目,
+	// 如果节点N回复日志不一致,leader会将NextIndex[serverN]的值减一为x-1.
+	NextIndex []int
 
 	// for each server, index of the highest log entry known to be replicated on server (initialized to 0, increases monotonically)
-	// matchIndex []int
+	//
+	// 记录每个follower上已经复制了的最高日志条目索引，
+	// 用于协助领导者判断某个日志条目是否已经在大多数节点上成功复制，
+	// 从而决定是否提交日志.
+	//
+	// MatchIndex = [5, 5, 3, 3, 0] 表示索引为5的日志条目在节点0和1已经成功复制,
+	// 索引为3的日志条目在节点2和3已经成功复制，
+	// 节点4尚未复制任何日志
+	MatchIndex []int
 }
 
 type LogEntry struct {
@@ -128,16 +145,33 @@ type LogEntry struct {
 	Command interface{}
 }
 
+// # PrevLogIndex Leader希望follower复制的日志条目的前一个日志条目的索引
+//
+// # PreLogTerm PrevLogIndex所在的Term
+//
+// # Entries   Leader希望follower复制的日志条目
+//
+// # LeaderCommit Leader已提交的日志条目的最高索引
 type AppendEntriesArgs struct {
-	Term     int
-	LeaderID int
+	Term         int
+	LeaderID     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []LogEntry
+	LeaderCommit int
 }
 
+// ConflictIndex  follower冲突的第一个索引
+//
+// 例如follower的日志中最后一个索引为 10，
+// 而leader发送的日志起始索引为 12，则返回 ConflictIndex = 11。
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term          int
+	Success       bool
+	ConflictIndex int
 }
 
+// AppendEntries RPC Handler
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	fmt.Printf("server %d received AppendEntries from leader %d\n", rf.me, args.LeaderID)
 
@@ -164,6 +198,8 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	reply.Term = args.Term
 	reply.Success = true
 	fmt.Printf("server %d is alive -> leader %d\n", rf.me, args.LeaderID)
+
+	// 进行
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -563,18 +599,26 @@ func (rf *Raft) election() {
 	}
 }
 
+// AppendEntries 的处理过程也包含在 HeartBeat 中。
 func (rf *Raft) HeartBeat() {
 
-	// 持久化存储状态
 	rf.mu.Lock()
-	rf.TimeStamp = time.Now()
-	rf.persist()
-	rf.mu.Unlock()
-
-	aeArgs := AppendEntriesArgs{
-		LeaderID: rf.me,
-		Term:     rf.CurrentTerm,
+	if rf.Role != leader {
+		rf.mu.Unlock()
+		return
 	}
+	rf.TimeStamp = time.Now()
+	// 持久化存储状态
+	rf.persist()
+
+	// TODO complete the aeArgs
+	aeArgs := AppendEntriesArgs{
+		LeaderID:     rf.me,
+		Term:         rf.CurrentTerm,
+		LeaderCommit: rf.CommitIndex,
+	}
+
+	rf.mu.Unlock()
 
 	fmt.Printf("leader %d sending heartbeat to all servers\n", rf.me)
 
@@ -582,27 +626,36 @@ func (rf *Raft) HeartBeat() {
 		if i == rf.me {
 			continue
 		}
+		rf.mu.Lock()
+		// 不是leader则立即退出
+		if rf.Role != leader {
+			rf.mu.Unlock()
+			break
+		}
+		rf.mu.Unlock()
 		go func() {
-			// rf.mu.Lock()
-			// defer rf.mu.Unlock()
 
 			aeReply := AppendEntriesReply{}
 			fmt.Printf("leader %d send heartbeat to server %d\n", rf.me, i)
 			ok := rf.sendAppendEntries(i, aeArgs, &aeReply)
-
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
 
 			if !ok {
 				fmt.Printf("server %d couldn'g be contacted with heartbeat\n", i)
 				return
 			}
 
-			// 目标server拒绝确认领导权，存在新Term，以follower身份加入新Term
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			// 目标server拒绝确认领导权，存在新Term，等待新leader发送心跳
 			if !aeReply.Success {
-				rf.Donw2Follower4NewTerm(aeReply.Term)
+				// rf.Donw2Follower4NewTerm(aeReply.Term)
 				return
 			}
+
+			// 向follower追加 LogEntries
+			// match := aeArgs.PrevLogIndex + len(aeArgs.Entries)
+
 		}()
 	}
 }
@@ -626,7 +679,8 @@ func (rf *Raft) Up2Leader() {
 	rf.Role = leader
 	rf.TimeStamp = time.Now()
 	fmt.Printf("server %d becomes leader of term %d\n", rf.me, rf.CurrentTerm)
-	go rf.HeartBeat()
+	// 成为leader后立刻发送一次心跳
+	// go rf.HeartBeat()
 }
 
 // 生成随机选举超时时间
