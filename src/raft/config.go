@@ -57,6 +57,12 @@ type config struct {
 	// 存储每个Raft节点发送的端口文件名
 	endnames [][]string // the port file names each sends to
 	// 存储每个Raft节点的已提交条目副本
+	// 例：
+	// logs := []map[int]int{
+	// 	{1: 10, 2: 20},   // Server 0 的日志条目，在任期1提交了索引为10的日志条目，在任期2提交了索引为20的日志条目。
+	// 	{1: 15, 3: 30},   // Server 1 的日志条目，在任期1提交了索引为15的日志条目，在任期3提交了索引为30的日志条目。
+	// 	{2: 25, 4: 40},   // Server 2 的日志条目，在任期2提交了索引为25的日志条目，在任期4提交了索引为40的日志条目。
+	// }
 	logs []map[int]int // copy of each server's committed entries
 }
 
@@ -353,7 +359,11 @@ func (cfg *config) checkNoLeader() {
 
 // how many servers think a log entry is committed?
 //
-// 统计多少个服务器认为某个日志条目已提交
+// 统计多少个服务器认为索引为 index 的日志条目已提交
+//
+// 参数：index:需要检查的日志条目的索引;
+//
+// 返回值：已提交该日志条目的服务器数量，该日志条目的命令值。
 func (cfg *config) nCommitted(index int) (int, interface{}) {
 	count := 0
 	cmd := -1
@@ -362,12 +372,14 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
 
+		// 获取日志条目
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
 		cfg.mu.Unlock()
 
 		if ok {
 			if count > 0 && cmd != cmd1 {
+				// 已经有其他服务器提交了该日志条目并且命令不一致
 				cfg.t.Fatalf("committed values do not match: index %v, %v, %v\n",
 					index, cmd, cmd1)
 			}
@@ -420,7 +432,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // as do the threads that read from applyCh.
 // returns index.
 //
-// 执行一次完整的日志条目提交过程，确保所有预期的服务器都达成一致
+// 执行一次完整的日志条目提交过程，确保预期数量的服务器达成一致，返回的是提交成功的日志条目的索引，不成功则返回-1
 func (cfg *config) one(cmd int, expectedServers int) int {
 	t0 := time.Now()
 	starts := 0
@@ -432,18 +444,22 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 			var rf *Raft
 			cfg.mu.Lock()
 			if cfg.connected[starts] {
+				// 如果该服务器连接正常，获取其 Raft 实例
 				rf = cfg.rafts[starts]
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
+				// 尝试在当前的服务器上提交一条命令
 				index1, _, ok := rf.Start(cmd)
 				if ok {
+					// 命令被leader接收，提交成功则记录该日志条目索引并跳出循环
 					index = index1
 					break
 				}
 			}
 		}
 
+		// 等待达成一致
 		if index != -1 {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.

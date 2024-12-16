@@ -155,8 +155,8 @@ type LogEntry struct {
 type AppendEntriesArgs struct {
 	Term         int
 	LeaderID     int
-	PrevLogIndex int
-	PrevLogTerm  int
+	PrevLogIndex int // new LogEntry的前一个LogEntry的Index
+	PrevLogTerm  int // new LogEntry的前一个LogEntry的Term
 	Entries      []LogEntry
 	LeaderCommit int
 }
@@ -190,16 +190,22 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// 或者同一任期的心跳来自的leader与当前server的VotedFor不同，则更改为新的leader
 	if rf.CurrentTerm < args.Term || rf.VotedFor != args.LeaderID {
 		rf.Donw2Follower4NewTerm(args.Term)
-		rf.VotedFor = args.LeaderID
+		// TODO rf.VotedFor应该置为-1还是args.LeaderID
+		// rf.VotedFor = args.LeaderID
+		rf.VotedFor = -1
 	}
 
-	// 同一个Term里leader发来的AppendEntry则视为测活心跳
+	// 同一个Term里leader发来的AppendEntry RPC
+	// args.Entrie != 0说明有要追加的日志条目
+	if len(args.Entries) != 0 {
+		copy(rf.Logs[:], args.Entries[:])
+	}
+
+	// args.Entrie == 0说明没有要追加的日志条目，视为简单的心跳测活
 	rf.TimeStamp = time.Now()
 	reply.Term = args.Term
 	reply.Success = true
 	fmt.Printf("server %d is alive -> leader %d\n", rf.me, args.LeaderID)
-
-	// 进行
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -276,9 +282,9 @@ type RequestVoteArgs struct {
 	// candidate requesting vote
 	CandidateID int
 	// index of candidate's last log entry
-	// LastLogIndex int
+	LastLogIndex int
 	// term of candidate's last log entry
-	// lastLogTerm int
+	lastLogTerm int
 }
 
 // example RequestVote RPC reply structure.
@@ -328,6 +334,15 @@ type RequestVoteReply struct {
 // 	}
 // }
 
+// TODO 根据Logs判断是否投票
+// the voter denies its vote if its own log is more up-to-date than that of the candidate.
+// Raft determines which of two logs is more up-to-date
+// by comparing the index and term of the last entries in the logs.
+// If the logs have last entries with different terms, then
+// the log with the later term is more up-to-date. If the logs
+// end with the same term, then whichever log is longer is
+// more up-to-date.
+//
 // 处理投票请求
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	fmt.Printf("server %d received RequestVote from server %d\n", rf.me, args.CandidateID)
@@ -394,10 +409,43 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
+//
+// 提交一条命令给server，如果该server是leader，就接收该命令并添加一条日志条目
+//
+// 参数：要提交的命令（日志条目的值）
+//
+// 返回值：包含该命令的日志条目的索引，当前任期，当前服务器是否认为自己是leader
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := -1
-	isLeader := true
+
+	if rf.dead {
+		return -1, -1, false
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term, isLeader := rf.GetState()
+
+	// 该服务器不是leader
+	if !isLeader {
+		return -1, term, isLeader
+	}
+
+	// 新提交的命令（日志条目）在日志中的索引
+	index = len(rf.Logs) + 1
+
+	// 该服务器是leader，添加一条日志条目
+	appendLogEntry := LogEntry{
+		Command: command,
+		Index:   index,
+		Term:    term,
+	}
+
+	rf.Logs = append(rf.Logs, appendLogEntry)
+	// 更新自己的信息
+	// rf.MatchIndex[rf.me] = rf.Logs[len(rf.Logs)-1].Index
+	// rf.NextIndex[rf.me] = rf.MatchIndex[rf.me] + 1
+	fmt.Printf("leader %d receives a new command: %d\n", rf.me, command)
 
 	return index, term, isLeader
 }
@@ -432,15 +480,19 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Your initialization code here.
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	rf.Role = follower
 	rf.VoteCnt = 0
 	rf.VotedFor = -1 // -1表示没有投票
 	rf.CurrentTerm = 0
 	rf.dead = false
-	rf.Logs = append(rf.Logs, LogEntry{
-		Term:    0,
-		Command: nil,
-	})
+	// 0表示切片的初始长度为0
+	rf.Logs = make([]LogEntry, 0)
+	rf.CommitIndex = 0
+	rf.LastApplied = 0
+	rf.NextIndex = make([]int, len(rf.peers))
+	rf.MatchIndex = make([]int, len(rf.peers))
 
 	fmt.Printf("succeeded in initializing server %d\n", rf.me)
 
@@ -449,8 +501,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.TimeStamp = time.Now()
 
 	fmt.Printf("server %d's role is %d\n", rf.me, rf.Role)
-
-	rf.mu.Unlock()
 
 	go rf.ticker()
 
@@ -603,37 +653,68 @@ func (rf *Raft) election() {
 func (rf *Raft) HeartBeat() {
 
 	rf.mu.Lock()
+
+	// 非leader则立即退出
 	if rf.Role != leader {
 		rf.mu.Unlock()
 		return
 	}
+
 	rf.TimeStamp = time.Now()
+	// 更新自己的信息
+	rf.MatchIndex[rf.me] = rf.Logs[len(rf.Logs)-1].Index
+	rf.NextIndex[rf.me] = rf.MatchIndex[rf.me] + 1
 	// 持久化存储状态
 	rf.persist()
-
-	// TODO complete the aeArgs
-	aeArgs := AppendEntriesArgs{
-		LeaderID:     rf.me,
-		Term:         rf.CurrentTerm,
-		LeaderCommit: rf.CommitIndex,
-	}
-
 	rf.mu.Unlock()
 
 	fmt.Printf("leader %d sending heartbeat to all servers\n", rf.me)
 
 	for i := 0; i < len(rf.peers); i++ {
+
 		if i == rf.me {
 			continue
 		}
+
+		// TODO 这部分是否许需要判断是不是leader？
 		rf.mu.Lock()
-		// 不是leader则立即退出
+		// 不是leader则立即停止发送RPC
 		if rf.Role != leader {
 			rf.mu.Unlock()
 			break
 		}
 		rf.mu.Unlock()
-		go func() {
+
+		go func(idx int) {
+			// leader已被终结
+			if rf.dead {
+				return
+			}
+			// 普通心跳，则appendLogEntries为空
+			appendLogEntries := []LogEntry{}
+
+			rf.mu.Lock()
+			// leader的最后的日志条目的索引大于该follower的下一个日志条目索引
+			// 说明有新的LogEntry需要发送
+			// rf.Logs[len(rf.Logs)-1].Index即为leader中最后的LogEntry的索引
+			if rf.Logs[len(rf.Logs)-1].Index > rf.NextIndex[idx] {
+				// 构造要发送的LogEntries，长度为
+				appendLogEntries = make([]LogEntry, len(rf.Logs)+rf.Logs[len(rf.Logs)-1].Index-rf.NextIndex[idx])
+				// 将要发送的LogEntries复制到appendLogEntries中
+				copy(appendLogEntries, rf.Logs[rf.NextIndex[idx]-rf.Logs[len(rf.Logs)-1].Index:])
+			}
+			// 构造RPC参数
+			// rf.Logs[rf.NextIndex[idx]-rf.Logs[len(rf.Logs)-1].Index-1]为
+			// 要追加给follower的LogEntries的前一条LogEntry
+			aeArgs := AppendEntriesArgs{
+				Term:         rf.CurrentTerm,
+				LeaderID:     rf.me,
+				PrevLogIndex: rf.Logs[rf.NextIndex[idx]-rf.Logs[len(rf.Logs)-1].Index-1].Index,
+				PrevLogTerm:  rf.Logs[rf.NextIndex[idx]-rf.Logs[len(rf.Logs)-1].Index-1].Term,
+				Entries:      appendLogEntries,
+				LeaderCommit: rf.CommitIndex,
+			}
+			rf.mu.Unlock()
 
 			aeReply := AppendEntriesReply{}
 			fmt.Printf("leader %d send heartbeat to server %d\n", rf.me, i)
@@ -647,16 +728,28 @@ func (rf *Raft) HeartBeat() {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
-			// 目标server拒绝确认领导权，存在新Term，等待新leader发送心跳
+			// 如果已经不是leader，直接返回
+			// 如果任期已更新，则不处理就任期的RPC响应，直接返回
+			if rf.Role != leader || rf.CurrentTerm != aeArgs.Term {
+				return
+			}
+
+			// 目标server拒绝确认领导权
+			// 如果有更新的任期存在，直接返回，等待新leader发送的心跳
 			if !aeReply.Success {
 				// rf.Donw2Follower4NewTerm(aeReply.Term)
 				return
 			}
 
-			// 向follower追加 LogEntries
-			// match := aeArgs.PrevLogIndex + len(aeArgs.Entries)
+			// AppendEntries成功
+			expectedMatchIdx := rf.NextIndex[idx] + len(aeArgs.Entries)
+			// 更新leader储存的followers的信息
+			rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
+			rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
 
-		}()
+			// TODO 判断是否更新CommitIndex
+
+		}(i)
 	}
 }
 
@@ -694,3 +787,9 @@ func getElectionTimeout() int {
 // 	defer rf.mu.Unlock()
 // 	rf.TimeStamp = time.Now()
 // }
+
+func (rf *Raft) getPrevLogIndex() {
+}
+
+func (rf *Raft) getPrevLogTerm() {
+}

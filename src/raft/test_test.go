@@ -80,6 +80,7 @@ func TestReElection(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 }
 
+// 提交一条命令给Raft，检查该命令是否能在集群中达成一致状态。
 func TestBasicAgree(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false)
@@ -87,13 +88,17 @@ func TestBasicAgree(t *testing.T) {
 
 	fmt.Printf("Test: basic agreement ...\n")
 
+	// 进行3次日志条目提交测试
 	iters := 3
 	for index := 1; index < iters+1; index++ {
+		// 检查初始状态，初始时提交的日志条目应对都为0
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
+			// 有服务器认为索引为index的日志条目（命令）被提交
 			t.Fatalf("some have committed before Start()")
 		}
 
+		// 提交一条日志条目，index*100是日志条目的value，servers是服务器的数量
 		xindex := cfg.one(index*100, servers)
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
