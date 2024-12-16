@@ -748,6 +748,7 @@ func (rf *Raft) HeartBeat() {
 				return
 			}
 
+			//  TODO 考虑如何处理冲突，不能仅凭 len(aeArgs.Entries) == 0 就认为是简单的心跳测活，还要检测有没有冲突
 			if len(aeArgs.Entries) != 0 {
 				// AppendEntries成功
 				expectedMatchIdx := rf.NextIndex[idx] + len(aeArgs.Entries)
