@@ -488,7 +488,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.CurrentTerm = 0
 	rf.dead = false
 	// 0表示切片的初始长度为0
-	rf.Logs = make([]LogEntry, 0)
+	rf.Logs = []LogEntry{
+		{
+			Command: nil,
+			Index:   0,
+			Term:    -1,
+		},
+	}
 	rf.CommitIndex = 0
 	rf.LastApplied = 0
 	rf.NextIndex = make([]int, len(rf.peers))
@@ -706,6 +712,7 @@ func (rf *Raft) HeartBeat() {
 			// 构造RPC参数
 			// rf.Logs[rf.NextIndex[idx]-rf.Logs[len(rf.Logs)-1].Index-1]为
 			// 要追加给follower的LogEntries的前一条LogEntry
+			fmt.Printf("%d, %d\n", rf.NextIndex[idx], rf.Logs[len(rf.Logs)-1].Index)
 			aeArgs := AppendEntriesArgs{
 				Term:         rf.CurrentTerm,
 				LeaderID:     rf.me,
@@ -741,13 +748,15 @@ func (rf *Raft) HeartBeat() {
 				return
 			}
 
-			// AppendEntries成功
-			expectedMatchIdx := rf.NextIndex[idx] + len(aeArgs.Entries)
-			// 更新leader储存的followers的信息
-			rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
-			rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
+			if len(aeArgs.Entries) != 0 {
+				// AppendEntries成功
+				expectedMatchIdx := rf.NextIndex[idx] + len(aeArgs.Entries)
+				// 更新leader储存的followers的信息
+				rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
+				rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
 
-			// TODO 判断是否更新CommitIndex
+				// TODO 判断是否更新CommitIndex
+			}
 
 		}(i)
 	}
@@ -774,6 +783,18 @@ func (rf *Raft) Up2Leader() {
 	fmt.Printf("server %d becomes leader of term %d\n", rf.me, rf.CurrentTerm)
 	// 成为leader后立刻发送一次心跳
 	// go rf.HeartBeat()
+
+	// 初始化NextIndex和MatchIndex
+	rf.NextIndex = make([]int, len(rf.peers))
+	rf.MatchIndex = make([]int, len(rf.peers))
+	for i := 0; i < len(rf.peers); i++ {
+		// 初始化为leader的最后一个日志条目的索引加1
+		rf.NextIndex[i] = rf.Logs[len(rf.Logs)-1].Index + 1
+	}
+	for i := 0; i < len(rf.peers); i++ {
+		// 初始化为0
+		rf.MatchIndex[i] = 0
+	}
 }
 
 // 生成随机选举超时时间
