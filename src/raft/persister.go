@@ -50,7 +50,7 @@ func (ps *Persister) SaveRaftState(data []byte) {
 	if data == nil {
 		fmt.Println("WARNING: 要持久化的数据为空")
 	}
-	fmt.Println("正在持久化存储数据...")
+	// fmt.Println("正在持久化存储数据...")
 	ps.raftstate = data
 }
 
@@ -58,7 +58,7 @@ func (ps *Persister) SaveRaftState(data []byte) {
 func (ps *Persister) ReadRaftState() []byte {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	fmt.Println("正在读取持久化数据...")
+	// fmt.Println("正在读取持久化数据...")
 	return ps.raftstate
 }
 

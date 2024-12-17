@@ -443,16 +443,19 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 			starts = (starts + 1) % cfg.n
 			var rf *Raft
 			cfg.mu.Lock()
+			// fmt.Println(cfg.logs)
 			if cfg.connected[starts] {
 				// 如果该服务器连接正常，获取其 Raft 实例
 				rf = cfg.rafts[starts]
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
+				// fmt.Println("try to submit a command to SERVER")
 				// 尝试在当前的服务器上提交一条命令
 				index1, _, ok := rf.Start(cmd)
 				if ok {
 					// 命令被leader接收，提交成功则记录该日志条目索引并跳出循环
+					fmt.Println("LEADER confirmed a command")
 					index = index1
 					break
 				}
@@ -466,6 +469,7 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				fmt.Printf("nd is %d\n", nd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {
