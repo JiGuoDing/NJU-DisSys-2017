@@ -183,7 +183,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	fmt.Printf("server %d's Logs:\n", rf.me)
 	fmt.Println(rf.Logs)
 
-	// 接收到AppendEntry的服务器的Term大于发送发送AppendEntry的Term，则拒绝确认领导权
+	// 接收到AppendEntry的服务器的Term大于发送发送AppendEntry的Term，则拒绝确认领导权，并直接返回
 	if rf.CurrentTerm > args.Term {
 		fmt.Printf("server %d in term %d received AppendEntries from old term %d\n", rf.me, rf.CurrentTerm, args.Term)
 		reply.Term = rf.CurrentTerm
@@ -201,7 +201,22 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	}
 
 	// consistency check 一致性检查
-	if
+
+	// PrevLogIndex大于follower的日志长度，肯定不一致
+	if args.PrevLogIndex > len(rf.Logs) {
+		reply.Success = false
+		reply.ConflictIndex = rf.Logs[len(rf.Logs)-1].Index
+		reply.ConflictTerm = rf.Logs[len(rf.Logs)-1].Term
+		return
+	}
+
+	// followe中没有匹配PrevLogIndex和PrevLogTerm的日志条目，不一致
+	if !exitsInLogEntries(args.PrevLogIndex, args.PrevLogTerm, rf.Logs) {
+		reply.Success = false
+		reply.ConflictIndex = rf.Logs[len(rf.Logs)-1].Index + 1
+		reply.ConflictTerm = -1
+		return
+	}
 
 	// 同一个Term里leader发来的AppendEntry RPC
 	// args.Entrie != 0说明有要追加的日志条目
@@ -400,13 +415,12 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	} else if args.lastLogTerm == rf.Logs[len(rf.Logs)-1].Term {
 		// candidate的日志条目过短
-		if args.LastLogIndex < len(rf.Logs){
+		if args.LastLogIndex < len(rf.Logs) {
 			fmt.Printf("server %d rejects RequestVote from server %d because its log is outdated\n", rf.me, args.CandidateID)
 			reply.VoteGranted = false
 			return
 		}
-	} 
-
+	}
 
 	// 为该server投票
 	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
@@ -641,10 +655,10 @@ func (rf *Raft) election() {
 	rf.mu.Unlock()
 
 	reqArgs := RequestVoteArgs{
-		Term:        rf.CurrentTerm,
-		CandidateID: rf.me,
+		Term:         rf.CurrentTerm,
+		CandidateID:  rf.me,
 		LastLogIndex: rf.Logs[len(rf.Logs)-1].Index,
-		lastLogTerm: rf.Logs[len(rf.Logs)-1].Term,
+		lastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,
 	}
 
 	for i := 0; i < len(rf.peers); i++ {
@@ -759,8 +773,8 @@ func (rf *Raft) HeartBeat() {
 			// rf.Logs[len(rf.Logs)-1].Index即为leader中最后的LogEntry的索引
 			if rf.Logs[len(rf.Logs)-1].Index >= rf.NextIndex[idx] {
 				fmt.Println("This time's appendEntries is not empty")
-				// 构造要发送的LogEntries，长度为
-				appendLogEntries = make([]LogEntry, len(rf.Logs[rf.NextIndex[idx]-1:]))
+				// 构造要发送的LogEntries，长度为len(rf.Logs)-rf.NextIndex[idx]+1
+				appendLogEntries = make([]LogEntry, len(rf.Logs)-rf.NextIndex[idx]+1)
 				// 将要发送的LogEntries复制到appendLogEntries中
 				copy(appendLogEntries, rf.Logs[rf.NextIndex[idx]-1:])
 			}
@@ -878,6 +892,16 @@ func (rf *Raft) Apply(Index int, Command interface{}) {
 // 生成随机选举超时时间
 func getElectionTimeout() int {
 	return rand.Intn(MaxElectionTimeout-MinElectionTimeout) + MinElectionTimeout
+}
+
+// 判断一个日志条目是否在一个raft server的Logs中
+func exitsInLogEntries(index int, term int, Logs []LogEntry) bool {
+	for _, entry := range Logs {
+		if index == entry.Index && term == entry.Term {
+			return true
+		}
+	}
+	return false
 }
 
 // 更新时间戳
