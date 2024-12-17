@@ -170,6 +170,7 @@ type AppendEntriesReply struct {
 	Term          int
 	Success       bool
 	ConflictIndex int
+	ConflictTerm  int
 }
 
 // AppendEntries RPC Handler
@@ -219,6 +220,13 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	// 不断尝试重连
+	if !ok {
+		if rf.dead {
+			return false
+		}
+		ok = rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	}
 	return ok
 }
 
@@ -685,7 +693,6 @@ func (rf *Raft) HeartBeat() {
 	fmt.Println(rf.NextIndex)
 	// 持久化存储状态
 	rf.persist()
-	fmt.Println(rf.Logs)
 	rf.mu.Unlock()
 
 	// fmt.Printf("leader %d sending heartbeat to all servers\n", rf.me)
@@ -706,6 +713,7 @@ func (rf *Raft) HeartBeat() {
 		rf.mu.Unlock()
 
 		go func(idx int) {
+
 			// leader已被终结
 			if rf.dead {
 				return
@@ -714,15 +722,20 @@ func (rf *Raft) HeartBeat() {
 			appendLogEntries := []LogEntry{}
 
 			rf.mu.Lock()
+			fmt.Println(rf.Logs)
+
+			// paper figure 2 rules for servers(leaders)
+			// If last log index ≥ nextIndex for a follower: send
+			// AppendEntries RPC with log entries starting at nextIndex
 			// leader的最后的日志条目的索引大于该follower的下一个日志条目索引
 			// 说明有新的LogEntry需要发送
 			// rf.Logs[len(rf.Logs)-1].Index即为leader中最后的LogEntry的索引
 			if rf.Logs[len(rf.Logs)-1].Index >= rf.NextIndex[idx] {
 				fmt.Println("This time's appendEntries is not empty")
 				// 构造要发送的LogEntries，长度为
-				appendLogEntries = make([]LogEntry, 1)
+				appendLogEntries = make([]LogEntry, len(rf.Logs[rf.NextIndex[idx]-1:]))
 				// 将要发送的LogEntries复制到appendLogEntries中
-				copy(appendLogEntries, rf.Logs[rf.NextIndex[idx]:])
+				copy(appendLogEntries, rf.Logs[rf.NextIndex[idx]-1:])
 			}
 			// fmt.Println(appendLogEntries)
 			// 构造RPC参数
@@ -769,7 +782,7 @@ func (rf *Raft) HeartBeat() {
 			if len(aeArgs.Entries) != 0 {
 				// AppendEntries成功
 				// fmt.Printf("rf.NextIndex[%d]: %d, len(aeArgs.Entries): %d\n", idx, rf.NextIndex[idx], len(aeArgs.Entries))
-				expectedMatchIdx := rf.NextIndex[idx] + len(aeArgs.Entries) - 1
+				expectedMatchIdx := rf.MatchIndex[rf.me]
 				// 更新leader储存的followers的信息
 				rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
 				rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
@@ -783,7 +796,7 @@ func (rf *Raft) HeartBeat() {
 					}
 				}
 				if replica_cnt > len(rf.peers)/2 {
-					rf.CommitIndex = rf.MatchIndex[idx]
+					rf.CommitIndex += len(aeArgs.Entries)
 					fmt.Printf("提交索引为 %d 的日志\n", rf.CommitIndex)
 					rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
 				}
@@ -847,8 +860,8 @@ func getElectionTimeout() int {
 // 	rf.TimeStamp = time.Now()
 // }
 
-func (rf *Raft) getPrevLogIndex() {
-}
+// func (rf *Raft) getPrevLogIndex() {
+// }
 
-func (rf *Raft) getPrevLogTerm() {
-}
+// func (rf *Raft) getPrevLogTerm() {
+// }
