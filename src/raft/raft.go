@@ -200,6 +200,9 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		rf.VotedFor = args.LeaderID
 	}
 
+	// consistency check 一致性检查
+	if
+
 	// 同一个Term里leader发来的AppendEntry RPC
 	// args.Entrie != 0说明有要追加的日志条目
 	// TODO 修改
@@ -382,6 +385,28 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// fmt.Printf("server %d's VotedFor is %d\n", rf.me, rf.VotedFor)
+
+	// 判断candidate的日志是否足够up-to-date（足够新）。首先看任期，其次看日志长度。
+	// up-to-date的定义
+	// If the logs have last entries with different terms, then
+	// the log with the later term is more up-to-date. If the logs
+	// end with the same term, then whichever log is longer is
+	// more up-to-date.
+
+	// candidate的最后一条日志条目的任期过时了
+	if args.lastLogTerm < rf.Logs[len(rf.Logs)-1].Term {
+		fmt.Printf("server %d rejects RequestVote from server %d because its log is outdated\n", rf.me, args.CandidateID)
+		reply.VoteGranted = false
+		return
+	} else if args.lastLogTerm == rf.Logs[len(rf.Logs)-1].Term {
+		// candidate的日志条目过短
+		if args.LastLogIndex < len(rf.Logs){
+			fmt.Printf("server %d rejects RequestVote from server %d because its log is outdated\n", rf.me, args.CandidateID)
+			reply.VoteGranted = false
+			return
+		}
+	} 
+
 
 	// 为该server投票
 	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
@@ -618,6 +643,8 @@ func (rf *Raft) election() {
 	reqArgs := RequestVoteArgs{
 		Term:        rf.CurrentTerm,
 		CandidateID: rf.me,
+		LastLogIndex: rf.Logs[len(rf.Logs)-1].Index,
+		lastLogTerm: rf.Logs[len(rf.Logs)-1].Term,
 	}
 
 	for i := 0; i < len(rf.peers); i++ {
