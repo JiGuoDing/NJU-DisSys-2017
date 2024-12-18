@@ -186,9 +186,15 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	reply.ConflictIndex = -1
 	reply.ConflictTerm = -1
 
-	// 接收到AppendEntry的服务器的Term大于发送发送AppendEntry的Term，则拒绝确认领导权，并直接返回
+	// follower的Term大于leader的Term，则判断follower是否是断连后重连
 	if rf.CurrentTerm > args.Term {
 		fmt.Printf("server %d in term %d received AppendEntries from old term %d\n", rf.me, rf.CurrentTerm, args.Term)
+		// 如果follower的Logs长度小于PrevLogIndex，则进入该Term
+		println(len(rf.Logs), args.LeaderCommit)
+		if len(rf.Logs) < args.LeaderCommit {
+			rf.Down2Follower4NewTerm(args.Term)
+			rf.VotedFor = args.LeaderID
+		}
 		reply.Success = false
 		return
 	}
@@ -196,7 +202,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// 接收到AppendEntry的服务器的Term小于等于发送AppendEntry的leader的Term，则加入新的Term
 	// 或者同一任期的心跳来自的leader与当前server的VotedFor不同，则更改为新的leader
 	if rf.CurrentTerm < args.Term || rf.VotedFor != args.LeaderID {
-		rf.Donw2Follower4NewTerm(args.Term)
+		rf.Down2Follower4NewTerm(args.Term)
 		rf.VotedFor = args.LeaderID
 	}
 
@@ -243,7 +249,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		rf.CommitIndex = min(args.LeaderCommit, rf.Logs[len(rf.Logs)-1].Index)
 		if rf.CommitIndex > formerCommitIndex {
 			for index := formerCommitIndex + 1; index <= rf.CommitIndex; index++ {
-				fmt.Printf("server %d 提交索引为 %d 的日志\n", rf.me, rf.CommitIndex)
+				fmt.Printf("server %d 提交索引为 %d 的日志\n", rf.me, index)
 				rf.Apply(index, rf.Logs[index].Command)
 			}
 		}
@@ -418,7 +424,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// 收到来自相同或更新的Term的投票请求
-	fmt.Printf("server %d received RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
+	fmt.Printf("server %d received RequestVote from server %d with term %d\n", rf.me, args.CandidateID, args.Term)
 	// // 加入新Term
 	// rf.Donw2Follower4NewTerm(args.Term)
 	// rf.VotedFor = args.CandidateID
@@ -672,13 +678,12 @@ func (rf *Raft) election() {
 	}
 
 	// 持久化存储状态
-	// fmt.Printf("server %d starting a new election\n", rf.me)
+	fmt.Printf("server %d starting a new election\n", rf.me)
 	// rf.Role = candidate
 	rf.VotedFor = rf.me
 	rf.VoteCnt = 1
 	rf.TimeStamp = time.Now()
 	rf.persist()
-	rf.mu.Unlock()
 
 	reqArgs := RequestVoteArgs{
 		Term:         rf.CurrentTerm,
@@ -686,6 +691,7 @@ func (rf *Raft) election() {
 		LastLogIndex: rf.Logs[len(rf.Logs)-1].Index,
 		lastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,
 	}
+	rf.mu.Unlock()
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -728,7 +734,8 @@ func (rf *Raft) election() {
 				// 如果请求对象的Term小于等于本candaidate设置的新Term但是没为本candidate投票，
 				// 说明本candidate的日志outdated了，退出选举
 				if reqReply.Term <= rf.CurrentTerm {
-					rf.Donw2Follower4NewTerm(reqReply.Term)
+					rf.Down2Follower4NewTerm(reqReply.Term)
+					rf.VotedFor = -1
 					return
 				}
 				// 存在更新的Term，等待leader发送心跳
@@ -809,7 +816,7 @@ func (rf *Raft) HeartBeat() {
 			// 说明有新的LogEntry需要发送
 			// rf.Logs[len(rf.Logs)-1].Index即为leader中最后的LogEntry的索引
 			if rf.Logs[len(rf.Logs)-1].Index >= rf.NextIndex[idx] {
-				fmt.Println("This time's appendEntries is not empty")
+				fmt.Printf("This time's appendEntrie for %d is not empty\n", idx)
 				// 构造要发送的LogEntries，长度为len(rf.Logs)-rf.NextIndex[idx]+1
 				appendLogEntries = make([]LogEntry, len(rf.Logs)-rf.NextIndex[idx])
 				// 将要发送的LogEntries复制到appendLogEntries中
@@ -856,7 +863,8 @@ func (rf *Raft) HeartBeat() {
 			if len(aeArgs.Entries) != 0 {
 				// 有冲突就处理冲突
 				if !aeReply.Success {
-					rf.NextIndex[idx] -= 1
+					// 防止NextIndex[]更新过快变为0
+					rf.NextIndex[idx] = max(1, rf.NextIndex[idx]-1)
 					return
 				}
 
@@ -894,7 +902,7 @@ func (rf *Raft) HeartBeat() {
 
 // 接收到最新Term的消息，以follower身份加入新Term
 // 在该函数的上下文要有互斥锁包围
-func (rf *Raft) Donw2Follower4NewTerm(NewTerm int) {
+func (rf *Raft) Down2Follower4NewTerm(NewTerm int) {
 	rf.CurrentTerm = NewTerm
 	rf.Role = follower
 	rf.VoteCnt = 0

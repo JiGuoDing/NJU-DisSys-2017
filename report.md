@@ -52,3 +52,7 @@ type RaftState struct {
 	matchIndex []int
 }
 ```
+
+## 问题记录
+
+- 一个follower断连再重连后，需要一个重新进入Term的过程，在此过程中，leader可能会将其NextIndex[]的值减少至0甚至一下，故需要防止NextIndex[]小于等于0
