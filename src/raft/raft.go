@@ -180,13 +180,11 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	fmt.Printf("server %d's Logs:\n", rf.me)
-	fmt.Println(rf.Logs)
+	reply.Term = rf.CurrentTerm
 
 	// 接收到AppendEntry的服务器的Term大于发送发送AppendEntry的Term，则拒绝确认领导权，并直接返回
 	if rf.CurrentTerm > args.Term {
 		fmt.Printf("server %d in term %d received AppendEntries from old term %d\n", rf.me, rf.CurrentTerm, args.Term)
-		reply.Term = rf.CurrentTerm
 		reply.Success = false
 		return
 	}
@@ -200,39 +198,60 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		rf.VotedFor = args.LeaderID
 	}
 
-	// consistency check 一致性检查
+	// 该AppendLogEntries RPC包含要追加的日志条目
+	if len(args.Entries) > 0 {
+		// consistency check 一致性检查
 
-	// PrevLogIndex大于follower的日志长度，肯定不一致
-	if args.PrevLogIndex > len(rf.Logs) {
-		reply.Success = false
-		reply.ConflictIndex = rf.Logs[len(rf.Logs)-1].Index
-		reply.ConflictTerm = rf.Logs[len(rf.Logs)-1].Term
-		return
+		// PrevLogIndex大于follower的日志长度，肯定不一致
+		if args.PrevLogIndex > len(rf.Logs) {
+			reply.Success = false
+			reply.ConflictIndex = rf.Logs[len(rf.Logs)-1].Index
+			reply.ConflictTerm = rf.Logs[len(rf.Logs)-1].Term
+			return
+		}
+
+		// follower中没有匹配PrevLogIndex和PrevLogTerm的日志条目，不一致
+		if !entryExistInLogEntries(args.PrevLogIndex, args.PrevLogTerm, rf.Logs) {
+			reply.Success = false
+			// follower中有匹配PrevLogIndex和PrevLogTerm的日志条目，但Term不同
+			// 这种情况下需要丢弃旧Term未提交的日志条目
+			if conflictTerm := indexExistInLogEntries(args.PrevLogIndex, rf.Logs); conflictTerm != -1 {
+				rf.Logs = rf.Logs[:args.PrevLogIndex]
+				// repairedLogs = append(repairedLogs, args.Entries...)
+				return
+			}
+
+			// 这种情况下希望的是leader逐个向前回溯NextIndex
+			reply.ConflictIndex = 1
+			reply.ConflictTerm = -1
+			return
+		}
+
+		// 存在匹配PrevLogIndex和PrevLogTerm的日志条目
+		// 一致性匹配成功
+		// 从PrevLogIndex位置开始复制leader发来的日志条目
+		truncatedLogs := rf.Logs[:args.PrevLogIndex]
+		truncatedLogs = append(truncatedLogs, args.Entries...)
+		rf.Logs = truncatedLogs
 	}
 
-	// followe中没有匹配PrevLogIndex和PrevLogTerm的日志条目，不一致
-	if !exitsInLogEntries(args.PrevLogIndex, args.PrevLogTerm, rf.Logs) {
-		reply.Success = false
-		reply.ConflictIndex = rf.Logs[len(rf.Logs)-1].Index + 1
-		reply.ConflictTerm = -1
-		return
-	}
-
-	// 同一个Term里leader发来的AppendEntry RPC
-	// args.Entrie != 0说明有要追加的日志条目
-	// TODO 修改
-	if len(args.Entries) != 0 {
-		rf.Logs = append(rf.Logs, args.Entries...)
-	}
-
+	// follower判断是否要提交日志条目
 	if args.LeaderCommit > rf.CommitIndex {
-		rf.CommitIndex = args.LeaderCommit
+		formerCommitIndex := rf.CommitIndex
+		rf.CommitIndex = min(args.LeaderCommit, rf.Logs[len(rf.Logs)-1].Index)
+		if rf.CommitIndex > formerCommitIndex {
+			fmt.Printf("server %d 提交索引为 %d 的日志\n", rf.me, rf.CommitIndex)
+			rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
+		}
 	}
 
-	// args.Entrie == 0说明没有要追加的日志条目，视为简单的心跳测活
-	rf.TimeStamp = time.Now()
-	reply.Term = args.Term
+	fmt.Printf("server %d's Logs:\n", rf.me)
+	fmt.Println(rf.Logs)
+
+	// 心跳测活
+	reply.Term = rf.CurrentTerm
 	reply.Success = true
+	rf.TimeStamp = time.Now()
 	fmt.Printf("server %d is alive -> leader %d\n", rf.me, args.LeaderID)
 }
 
@@ -732,6 +751,7 @@ func (rf *Raft) HeartBeat() {
 	rf.MatchIndex[rf.me] = rf.Logs[len(rf.Logs)-1].Index
 	rf.NextIndex[rf.me] = rf.MatchIndex[rf.me] + 1
 	fmt.Println(rf.NextIndex)
+	fmt.Println(rf.Logs)
 	// 持久化存储状态
 	rf.persist()
 	rf.mu.Unlock()
@@ -763,7 +783,6 @@ func (rf *Raft) HeartBeat() {
 			appendLogEntries := []LogEntry{}
 
 			rf.mu.Lock()
-			fmt.Println(rf.Logs)
 
 			// paper figure 2 rules for servers(leaders)
 			// If last log index ≥ nextIndex for a follower: send
@@ -774,9 +793,9 @@ func (rf *Raft) HeartBeat() {
 			if rf.Logs[len(rf.Logs)-1].Index >= rf.NextIndex[idx] {
 				fmt.Println("This time's appendEntries is not empty")
 				// 构造要发送的LogEntries，长度为len(rf.Logs)-rf.NextIndex[idx]+1
-				appendLogEntries = make([]LogEntry, len(rf.Logs)-rf.NextIndex[idx]+1)
+				appendLogEntries = make([]LogEntry, len(rf.Logs)-rf.NextIndex[idx])
 				// 将要发送的LogEntries复制到appendLogEntries中
-				copy(appendLogEntries, rf.Logs[rf.NextIndex[idx]-1:])
+				copy(appendLogEntries, rf.Logs[rf.NextIndex[idx]:])
 			}
 			// fmt.Println(appendLogEntries)
 			// 构造RPC参数
@@ -791,6 +810,7 @@ func (rf *Raft) HeartBeat() {
 				Entries:      appendLogEntries,
 				LeaderCommit: rf.CommitIndex,
 			}
+			// fmt.Printf("Sending entries: %v\n", appendLogEntries)
 			rf.mu.Unlock()
 
 			aeReply := AppendEntriesReply{}
@@ -814,12 +834,13 @@ func (rf *Raft) HeartBeat() {
 
 			// 目标server拒绝确认领导权
 			// 如果有更新的任期存在，直接返回，等待新leader发送的心跳
+			// 处理冲突
 			if !aeReply.Success {
 				// rf.Donw2Follower4NewTerm(aeReply.Term)
 				return
 			}
 
-			//  TODO 考虑如何处理冲突，不能仅凭 len(aeArgs.Entries) == 0 就认为是简单的心跳测活，还要检测有没有冲突
+			// 没有冲突
 			if len(aeArgs.Entries) != 0 {
 				// AppendEntries成功
 				// fmt.Printf("rf.NextIndex[%d]: %d, len(aeArgs.Entries): %d\n", idx, rf.NextIndex[idx], len(aeArgs.Entries))
@@ -827,9 +848,11 @@ func (rf *Raft) HeartBeat() {
 				// 更新leader储存的followers的信息
 				rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
 				rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
-				// TODO 判断是否更新CommitIndex
 
-				// 简易版本
+				// TODO 判断是否更新CommitIndex
+				// If there exists an N such that N > commitIndex, a majority
+				// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+				// set commitIndex = N
 				replica_cnt := 0
 				for i := 0; i < len(rf.peers); i++ {
 					if rf.MatchIndex[i] >= rf.CommitIndex {
@@ -837,8 +860,9 @@ func (rf *Raft) HeartBeat() {
 					}
 				}
 				if replica_cnt > len(rf.peers)/2 {
+
 					rf.CommitIndex += len(aeArgs.Entries)
-					fmt.Printf("提交索引为 %d 的日志\n", rf.CommitIndex)
+					fmt.Printf("leader提交索引为 %d 的日志\n", rf.CommitIndex)
 					rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
 				}
 			}
@@ -895,13 +919,25 @@ func getElectionTimeout() int {
 }
 
 // 判断一个日志条目是否在一个raft server的Logs中
-func exitsInLogEntries(index int, term int, Logs []LogEntry) bool {
+func entryExistInLogEntries(index int, term int, Logs []LogEntry) bool {
 	for _, entry := range Logs {
 		if index == entry.Index && term == entry.Term {
 			return true
 		}
 	}
 	return false
+}
+
+// 判断一个raft server的Logs中是否存在索引为index的日志条目
+// 若存在则返回该日志条目的Term
+// 若不存在则返回-1
+func indexExistInLogEntries(index int, Logs []LogEntry) int {
+	for _, entry := range Logs {
+		if index == entry.Index {
+			return entry.Term
+		}
+	}
+	return -1
 }
 
 // 更新时间戳
