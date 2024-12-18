@@ -741,11 +741,11 @@ func (rf *Raft) election() {
 
 			// 获得选票
 			rf.VoteCnt++
+			fmt.Printf("candidate %d 获得 server %d 的一票\n", rf.me, idx)
 
-			if rf.Role == leader {
-				return
-			}
-
+			// if rf.Role == leader {
+			// 	return
+			// }
 			if rf.VoteCnt > len(rf.peers)/2 {
 				rf.Up2Leader()
 			}
