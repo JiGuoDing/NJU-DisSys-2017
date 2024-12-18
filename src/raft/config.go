@@ -231,7 +231,7 @@ func (cfg *config) cleanup() {
 //
 // 使一个服务器连接网络
 func (cfg *config) connect(i int) {
-	// fmt.Printf("connect(%d)\n", i)
+	fmt.Printf("!!!!!! connect(%d)\n", i)
 
 	cfg.connected[i] = true
 
@@ -256,7 +256,7 @@ func (cfg *config) connect(i int) {
 //
 // 断开一个服务器到网络的连接
 func (cfg *config) disconnect(i int) {
-	// fmt.Printf("disconnect(%d)\n", i)
+	fmt.Printf("!!!!!! disconnect(%d)\n", i)
 
 	cfg.connected[i] = false
 

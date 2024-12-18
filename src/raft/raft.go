@@ -177,10 +177,14 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
 	// fmt.Printf("server %d received AppendEntries from leader %d\n", rf.me, args.LeaderID)
 
+	// fmt.Println("****************************************")
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.CurrentTerm
+	// 初始假设没有冲突
+	reply.ConflictIndex = -1
+	reply.ConflictTerm = -1
 
 	// 接收到AppendEntry的服务器的Term大于发送发送AppendEntry的Term，则拒绝确认领导权，并直接返回
 	if rf.CurrentTerm > args.Term {
@@ -193,8 +197,6 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// 或者同一任期的心跳来自的leader与当前server的VotedFor不同，则更改为新的leader
 	if rf.CurrentTerm < args.Term || rf.VotedFor != args.LeaderID {
 		rf.Donw2Follower4NewTerm(args.Term)
-		// TODO rf.VotedFor应该置为-1还是args.LeaderID
-		// rf.VotedFor = args.LeaderID
 		rf.VotedFor = args.LeaderID
 	}
 
@@ -240,8 +242,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		formerCommitIndex := rf.CommitIndex
 		rf.CommitIndex = min(args.LeaderCommit, rf.Logs[len(rf.Logs)-1].Index)
 		if rf.CommitIndex > formerCommitIndex {
-			fmt.Printf("server %d 提交索引为 %d 的日志\n", rf.me, rf.CommitIndex)
-			rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
+			for index := formerCommitIndex + 1; index <= rf.CommitIndex; index++ {
+				fmt.Printf("server %d 提交索引为 %d 的日志\n", rf.me, rf.CommitIndex)
+				rf.Apply(index, rf.Logs[index].Command)
+			}
 		}
 	}
 
@@ -256,7 +260,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
+
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	fmt.Println("****************************************")
+	// println("----------got ok's value")
 	// 不断尝试重连
 	if !ok {
 		if rf.dead {
@@ -410,15 +417,14 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	// 收到来自更新的Term的投票请求（存在更新的Term）
-	if args.Term > rf.CurrentTerm {
-		fmt.Printf("server %d received RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
-		// 加入新Term
-		rf.Donw2Follower4NewTerm(args.Term)
-		rf.VotedFor = args.CandidateID
-	}
-
-	// fmt.Printf("server %d's VotedFor is %d\n", rf.me, rf.VotedFor)
+	// 收到来自相同或更新的Term的投票请求
+	fmt.Printf("server %d received RequestVote from server %d with newer term %d\n", rf.me, args.CandidateID, args.Term)
+	// // 加入新Term
+	// rf.Donw2Follower4NewTerm(args.Term)
+	// rf.VotedFor = args.CandidateID
+	// reply.VoteGranted = true
+	// rf.TimeStamp = time.Now()
+	// return
 
 	// 判断candidate的日志是否足够up-to-date（足够新）。首先看任期，其次看日志长度。
 	// up-to-date的定义
@@ -712,16 +718,28 @@ func (rf *Raft) election() {
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
 
+			if rf.Role != candidate {
+				return
+			}
+
+			// candidate没有获得选票
+			if !reqReply.VoteGranted {
+				// 如果请求对象的Term小于等于本candaidate设置的新Term但是没为本candidate投票，
+				// 说明本candidate的日志outdated了，退出选举
+				if reqReply.Term <= rf.CurrentTerm {
+					rf.Donw2Follower4NewTerm(reqReply.Term)
+					return
+				}
+				// 存在更新的Term，等待leader发送心跳
+			}
+
 			// 收到来自更新的Term的投票请求，投票给他
-			if reqReply.Term > rf.CurrentTerm {
-				rf.Donw2Follower4NewTerm(reqReply.Term)
-				return
-			}
+			// if reqReply.Term > rf.CurrentTerm {
+			// 	rf.Donw2Follower4NewTerm(reqReply.Term)
+			// 	return
+			// }
 
-			if !reqReply.VoteGranted || rf.Role != candidate {
-				return
-			}
-
+			// 获得选票
 			rf.VoteCnt++
 
 			if rf.Role == leader {
@@ -783,7 +801,6 @@ func (rf *Raft) HeartBeat() {
 			appendLogEntries := []LogEntry{}
 
 			rf.mu.Lock()
-
 			// paper figure 2 rules for servers(leaders)
 			// If last log index ≥ nextIndex for a follower: send
 			// AppendEntries RPC with log entries starting at nextIndex
@@ -816,7 +833,9 @@ func (rf *Raft) HeartBeat() {
 			aeReply := AppendEntriesReply{}
 			// fmt.Printf("leader %d send heartbeat to server %d\n", rf.me, idx)
 			// fmt.Printf("%d\n", idx)
+			fmt.Println(aeArgs)
 			ok := rf.sendAppendEntries(idx, aeArgs, &aeReply)
+			// fmt.Printf("----------SERVER %d ARIVED HERE ----------\n", idx)
 
 			if !ok {
 				fmt.Printf("server %d couldn'g be contacted with heartbeat\n", idx)
