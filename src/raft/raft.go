@@ -447,6 +447,7 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 		}
 	}
 
+	fmt.Println(rf.VotedFor, args.CandidateID)
 	// 为该server投票
 	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
 		rf.VotedFor = args.CandidateID
@@ -740,8 +741,8 @@ func (rf *Raft) election() {
 			// }
 
 			// 获得选票
-			rf.VoteCnt++
 			fmt.Printf("candidate %d 获得 server %d 的一票\n", rf.me, idx)
+			rf.VoteCnt++
 
 			// if rf.Role == leader {
 			// 	return
