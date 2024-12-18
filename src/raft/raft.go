@@ -230,7 +230,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		// 存在匹配PrevLogIndex和PrevLogTerm的日志条目
 		// 一致性匹配成功
 		// 从PrevLogIndex位置开始复制leader发来的日志条目
-		truncatedLogs := rf.Logs[:args.PrevLogIndex]
+		truncatedLogs := rf.Logs[:args.PrevLogIndex+1]
 		truncatedLogs = append(truncatedLogs, args.Entries...)
 		rf.Logs = truncatedLogs
 	}
@@ -832,16 +832,15 @@ func (rf *Raft) HeartBeat() {
 				return
 			}
 
-			// 目标server拒绝确认领导权
-			// 如果有更新的任期存在，直接返回，等待新leader发送的心跳
-			// 处理冲突
-			if !aeReply.Success {
-				// rf.Donw2Follower4NewTerm(aeReply.Term)
-				return
-			}
-
-			// 没有冲突
+			// TODO
 			if len(aeArgs.Entries) != 0 {
+				// 有冲突就处理冲突
+				if !aeReply.Success {
+					rf.NextIndex[idx] -= 1
+					return
+				}
+
+				// 没有冲突
 				// AppendEntries成功
 				// fmt.Printf("rf.NextIndex[%d]: %d, len(aeArgs.Entries): %d\n", idx, rf.NextIndex[idx], len(aeArgs.Entries))
 				expectedMatchIdx := rf.MatchIndex[rf.me]
@@ -853,17 +852,20 @@ func (rf *Raft) HeartBeat() {
 				// If there exists an N such that N > commitIndex, a majority
 				// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 				// set commitIndex = N
-				replica_cnt := 0
-				for i := 0; i < len(rf.peers); i++ {
-					if rf.MatchIndex[i] >= rf.CommitIndex {
-						replica_cnt++
-					}
-				}
-				if replica_cnt > len(rf.peers)/2 {
 
-					rf.CommitIndex += len(aeArgs.Entries)
-					fmt.Printf("leader提交索引为 %d 的日志\n", rf.CommitIndex)
-					rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
+				for _, log := range rf.Logs[rf.CommitIndex+1:] {
+					replica_cnt := 0
+					for i := 0; i < len(rf.peers); i++ {
+						if rf.MatchIndex[i] >= log.Index {
+							replica_cnt++
+						}
+					}
+
+					if replica_cnt > len(rf.peers)/2 {
+						rf.CommitIndex = log.Index
+						fmt.Printf("leader提交索引为 %d 的日志\n", rf.CommitIndex)
+						rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
+					}
 				}
 			}
 		}(i)
