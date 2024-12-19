@@ -295,7 +295,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// 	If leaderCommit > commitIndex, set commitIndex =
 	// min(leaderCommit, index of last new entry)
 	// follower判断是否要提交日志条目
-	fmt.Println(args.LeaderCommit, rf.CommitIndex)
+	// fmt.Println(args.LeaderCommit, rf.CommitIndex)
 	if args.LeaderCommit > rf.CommitIndex {
 		formerCommitIndex := rf.CommitIndex
 		rf.CommitIndex = min(args.LeaderCommit, rf.Logs[len(rf.Logs)-1].Index)
@@ -624,7 +624,7 @@ func (rf *Raft) Kill() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.dead = true
-	fmt.Printf("server %d is killed\n", rf.me)
+	// fmt.Printf("server %d is killed\n", rf.me)
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -668,7 +668,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// fmt.Printf("succeeded in initializing server %d\n", rf.me)
 
 	// initialize from state persisted before a crash
-	fmt.Printf("%d 正在读取持久化数据\n", rf.me)
+	// fmt.Printf("%d 正在读取持久化数据\n", rf.me)
 	rf.readPersist(rf.persister.ReadRaftState())
 	rf.TimeStamp = time.Now()
 
@@ -1006,7 +1006,7 @@ func (rf *Raft) Up2Leader() {
 	if rf.Role != candidate {
 		return
 	}
-	fmt.Printf("%d 成为LEADER\n", rf.me)
+	// fmt.Printf("%d 成为LEADER\n", rf.me)
 	rf.Role = leader
 	rf.TimeStamp = time.Now()
 	// fmt.Printf("server %d becomes leader of term %d\n", rf.me, rf.CurrentTerm)
