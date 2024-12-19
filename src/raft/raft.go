@@ -194,7 +194,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 
 	// follower的Term大于leader的Term，则判断follower是否是断连后重连
 	// 或者是否是leader断连又重连后，发来的RPC
-	if rf.CurrentTerm > args.Term {
+	if args.Term < rf.CurrentTerm {
 		// fmt.Printf("server %d in term %d received AppendEntries from old term %d\n", rf.me, rf.CurrentTerm, args.Term)
 		// 如果follower的Logs长度小于PrevLogIndex，则进入该Term
 		// fmt.Println(len(rf.Logs), args.LeaderCommit)
