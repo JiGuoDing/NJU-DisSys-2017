@@ -382,14 +382,13 @@ func (rf *Raft) readPersist(data []byte) {
 		fmt.Printf("持久层数据为空，无法恢复\n")
 		return
 	}
-	rf.applyCh <- ApplyMsg{}
 	// 首先将字节切片转换为字节缓冲区
 	// fmt.Println(data)
 	buf := bytes.NewBuffer(data)
 	// 创建解码器
 	decoder := gob.NewDecoder(buf)
 
-	fmt.Printf("server %d is reloading persistent state\n", rf.me)
+	// fmt.Printf("server %d is reloading persistent state\n", rf.me)
 
 	// 创建包含持久化状态的结构体来接收解码后的数据
 	persistentState := PersistentState{}
@@ -404,7 +403,9 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.VotedFor = persistentState.VotedFor
 	rf.Logs = persistentState.Logs
 
-	fmt.Printf("server %d 's reloaded term is %d\n", rf.me, rf.CurrentTerm)
+	fmt.Printf("%d 成功读取状态\n", rf.me)
+
+	// fmt.Printf("server %d 's reloaded term is %d\n", rf.me, rf.CurrentTerm)
 }
 
 // example RequestVote RPC arguments structure.
@@ -757,7 +758,7 @@ func (rf *Raft) election() {
 	rf.TimeStamp = time.Now()
 	rf.persist()
 
-	fmt.Printf("Logs: %v\n", rf.Logs)
+	// fmt.Printf("Logs: %v\n", rf.Logs)
 	reqArgs := RequestVoteArgs{
 		Term:         rf.CurrentTerm,
 		CandidateID:  rf.me,
