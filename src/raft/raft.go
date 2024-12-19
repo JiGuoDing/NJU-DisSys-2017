@@ -268,7 +268,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
 
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	fmt.Println("****************************************")
+	// fmt.Println("****************************************")
 	// println("----------got ok's value")
 	// 不断尝试重连
 	if !ok {
@@ -349,7 +349,7 @@ type RequestVoteArgs struct {
 	// index of candidate's last log entry
 	LastLogIndex int
 	// term of candidate's last log entry
-	lastLogTerm int
+	LastLogTerm int
 }
 
 // example RequestVote RPC reply structure.
@@ -440,14 +440,15 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	// more up-to-date.
 
 	// candidate的最后一条日志条目的任期过时了
-	if args.lastLogTerm < rf.Logs[len(rf.Logs)-1].Term {
-		fmt.Printf("server %d rejects RequestVote from server %d because its log is outdated\n", rf.me, args.CandidateID)
+	// fmt.Println(args.LastLogTerm, rf.Logs[len(rf.Logs)-1].Term)
+	if args.LastLogTerm < rf.Logs[len(rf.Logs)-1].Term {
+		fmt.Printf("server %d rejects RequestVote from server %d because its lastLogTerm is outdated\n", rf.me, args.CandidateID)
 		reply.VoteGranted = false
 		return
-	} else if args.lastLogTerm == rf.Logs[len(rf.Logs)-1].Term {
+	} else if args.LastLogTerm == rf.Logs[len(rf.Logs)-1].Term {
 		// candidate的日志条目过短
-		if args.LastLogIndex < len(rf.Logs) {
-			fmt.Printf("server %d rejects RequestVote from server %d because its log is outdated\n", rf.me, args.CandidateID)
+		if args.LastLogIndex < len(rf.Logs)-1 {
+			fmt.Printf("server %d rejects RequestVote from server %d because its logs is too short\n", rf.me, args.CandidateID)
 			reply.VoteGranted = false
 			return
 		}
@@ -521,7 +522,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	// 新提交的命令（日志条目）在日志中的索引
-	index = rf.MatchIndex[rf.me] + 1
+	index = len(rf.Logs)
 
 	// 该服务器是leader，添加一条日志条目
 	appendLogEntry := LogEntry{
@@ -689,8 +690,9 @@ func (rf *Raft) election() {
 		Term:         rf.CurrentTerm,
 		CandidateID:  rf.me,
 		LastLogIndex: rf.Logs[len(rf.Logs)-1].Index,
-		lastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,
+		LastLogTerm:  rf.Logs[len(rf.Logs)-1].Term,
 	}
+	// fmt.Println("REQARGS:", reqArgs)
 	rf.mu.Unlock()
 
 	for i := 0; i < len(rf.peers); i++ {

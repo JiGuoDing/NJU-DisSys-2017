@@ -455,7 +455,7 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 				index1, _, ok := rf.Start(cmd)
 				if ok {
 					// 命令被leader接收，提交成功则记录该日志条目索引并跳出循环
-					fmt.Println("LEADER confirmed a command")
+					fmt.Printf("LEADER %d confirmed a command\n", rf.me)
 					index = index1
 					break
 				}
