@@ -525,7 +525,7 @@ func TestPersist1(t *testing.T) {
 	for i := 0; i < servers; i++ {
 		cfg.start1(i)
 	}
-	fmt.Println("reached here!")
+	// fmt.Println("reached here!")
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 		cfg.connect(i)

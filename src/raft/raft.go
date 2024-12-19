@@ -292,7 +292,10 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		}
 	}
 
+	// 	If leaderCommit > commitIndex, set commitIndex =
+	// min(leaderCommit, index of last new entry)
 	// follower判断是否要提交日志条目
+	fmt.Println(args.LeaderCommit, rf.CommitIndex)
 	if args.LeaderCommit > rf.CommitIndex {
 		formerCommitIndex := rf.CommitIndex
 		rf.CommitIndex = min(args.LeaderCommit, rf.Logs[len(rf.Logs)-1].Index)
@@ -368,7 +371,7 @@ func (rf *Raft) persist() {
 	}
 	rf.persister.SaveRaftState(data)
 	// fmt.Println(data)
-	fmt.Printf("%d 成功存储状态\n", rf.me)
+	// fmt.Printf("%d 成功存储状态\n", rf.me)
 }
 
 // restore previously persisted state.
@@ -379,7 +382,7 @@ func (rf *Raft) readPersist(data []byte) {
 	// Example:
 
 	if data == nil { // bootstrap without any state?
-		fmt.Printf("持久层数据为空，无法恢复\n")
+		// fmt.Printf("持久层数据为空，无法恢复\n")
 		return
 	}
 	// 首先将字节切片转换为字节缓冲区
@@ -403,7 +406,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.VotedFor = persistentState.VotedFor
 	rf.Logs = persistentState.Logs
 
-	fmt.Printf("%d 成功读取状态\n", rf.me)
+	// fmt.Printf("%d 成功读取状态\n", rf.me)
 
 	// fmt.Printf("server %d 's reloaded term is %d\n", rf.me, rf.CurrentTerm)
 }
@@ -665,6 +668,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// fmt.Printf("succeeded in initializing server %d\n", rf.me)
 
 	// initialize from state persisted before a crash
+	fmt.Printf("%d 正在读取持久化数据\n", rf.me)
 	rf.readPersist(rf.persister.ReadRaftState())
 	rf.TimeStamp = time.Now()
 
@@ -1002,6 +1006,7 @@ func (rf *Raft) Up2Leader() {
 	if rf.Role != candidate {
 		return
 	}
+	fmt.Printf("%d 成为LEADER\n", rf.me)
 	rf.Role = leader
 	rf.TimeStamp = time.Now()
 	// fmt.Printf("server %d becomes leader of term %d\n", rf.me, rf.CurrentTerm)
