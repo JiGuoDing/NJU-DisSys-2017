@@ -231,7 +231,7 @@ func (cfg *config) cleanup() {
 //
 // 使一个服务器连接网络
 func (cfg *config) connect(i int) {
-	fmt.Printf("!!!!!! connect(%d)\n", i)
+	// fmt.Printf("!!!!!! connect(%d)\n", i)
 
 	cfg.connected[i] = true
 
@@ -256,7 +256,7 @@ func (cfg *config) connect(i int) {
 //
 // 断开一个服务器到网络的连接
 func (cfg *config) disconnect(i int) {
-	fmt.Printf("!!!!!! disconnect(%d)\n", i)
+	// fmt.Printf("!!!!!! disconnect(%d)\n", i)
 
 	cfg.connected[i] = false
 
@@ -455,7 +455,7 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 				index1, _, ok := rf.Start(cmd)
 				if ok {
 					// 命令被leader接收，提交成功则记录该日志条目索引并跳出循环
-					fmt.Printf("LEADER %d confirmed a command\n", rf.me)
+					// fmt.Printf("LEADER %d confirmed a command\n", rf.me)
 					index = index1
 					break
 				}
@@ -469,7 +469,7 @@ func (cfg *config) one(cmd int, expectedServers int) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				fmt.Printf("nd is %d\n", nd)
+				// fmt.Printf("nd is %d\n", nd)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd2, ok := cmd1.(int); ok && cmd2 == cmd {

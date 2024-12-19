@@ -53,13 +53,13 @@ func TestReElection(t *testing.T) {
 
 	// if the leader disconnects, a new one should be elected.
 	cfg.disconnect(leader1)
-	fmt.Printf("leader %d disconnected\n", leader1)
+	// fmt.Printf("leader %d disconnected\n", leader1)
 	cfg.checkOneLeader()
 
 	// if the old leader rejoins, that shouldn't
 	// disturb the old leader.
 	cfg.connect(leader1)
-	fmt.Printf("leader %d reconnected", leader1)
+	// fmt.Printf("leader %d reconnected", leader1)
 	leader2 := cfg.checkOneLeader()
 
 	// if there's no quorum, no leader should
