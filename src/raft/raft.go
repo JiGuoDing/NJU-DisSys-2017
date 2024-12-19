@@ -140,6 +140,12 @@ type RaftState struct {
 	MatchIndex []int
 }
 
+type PersistentState struct {
+	CurrentTerm int
+	VotedFor    int
+	Logs        []LogEntry
+}
+
 type LogEntry struct {
 	Index   int
 	Term    int
@@ -342,43 +348,63 @@ func (rf *Raft) persist() {
 	// Your code here.
 	// Example:
 	// fmt.Printf("server %d is persisting state\n", rf.me)
-	w := new(bytes.Buffer)
-	e := gob.NewEncoder(w)
-	err := e.Encode(rf)
+
+	// 创建编码器
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	// 创建包含持久化状态的结构体
+	persistentState := PersistentState{rf.CurrentTerm, rf.VotedFor, rf.Logs}
+
+	// 开始编码
+	err := encoder.Encode(persistentState)
 	if err != nil {
-		// fmt.Printf("持久层数据编码失败\n")
+		fmt.Printf("持久层数据编码失败，错误原因：%v\n", err)
 	}
-	data := w.Bytes()
+	data := buf.Bytes()
 	if data == nil {
-		// fmt.Printf("持久层数据为空，无法保存\n")
+		fmt.Printf("持久层数据为空，无法保存\n")
 		return
 	}
 	rf.persister.SaveRaftState(data)
+	// fmt.Println(data)
+	fmt.Printf("%d 成功存储状态\n", rf.me)
 }
 
 // restore previously persisted state.
-//
+
 // 以stream形式读入，需要解码器解码
 func (rf *Raft) readPersist(data []byte) {
 	// Your code here.
 	// Example:
 
 	if data == nil { // bootstrap without any state?
-		// fmt.Printf("持久层数据为空，无法恢复\n")
+		fmt.Printf("持久层数据为空，无法恢复\n")
 		return
 	}
 	rf.applyCh <- ApplyMsg{}
-	r := bytes.NewBuffer(data)
-	d := gob.NewDecoder(r)
+	// 首先将字节切片转换为字节缓冲区
+	// fmt.Println(data)
+	buf := bytes.NewBuffer(data)
+	// 创建解码器
+	decoder := gob.NewDecoder(buf)
 
 	fmt.Printf("server %d is reloading persistent state\n", rf.me)
 
-	// 解码出持久化状态
-	d.Decode(&rf.CurrentTerm)
-	d.Decode(&rf.VotedFor)
-	d.Decode(&rf.Logs)
+	// 创建包含持久化状态的结构体来接收解码后的数据
+	persistentState := PersistentState{}
 
-	fmt.Printf("server %d 's reloaded term is \n", rf.CurrentTerm)
+	// 解码出持久化状态
+	err := decoder.Decode(&persistentState)
+	if err != nil {
+		fmt.Printf("持久层数据解码失败，错误原因：%v\n", err)
+	}
+
+	rf.CurrentTerm = persistentState.CurrentTerm
+	rf.VotedFor = persistentState.VotedFor
+	rf.Logs = persistentState.Logs
+
+	fmt.Printf("server %d 's reloaded term is %d\n", rf.me, rf.CurrentTerm)
 }
 
 // example RequestVote RPC arguments structure.
@@ -594,6 +620,7 @@ func (rf *Raft) Kill() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.dead = true
+	fmt.Printf("server %d is killed\n", rf.me)
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -730,6 +757,7 @@ func (rf *Raft) election() {
 	rf.TimeStamp = time.Now()
 	rf.persist()
 
+	fmt.Printf("Logs: %v\n", rf.Logs)
 	reqArgs := RequestVoteArgs{
 		Term:         rf.CurrentTerm,
 		CandidateID:  rf.me,

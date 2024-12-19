@@ -114,6 +114,7 @@ func (cfg *config) crash1(i int) {
 	// pass Make() the last persisted state.
 	if cfg.saved[i] != nil {
 		cfg.saved[i] = cfg.saved[i].Copy()
+		// fmt.Println(cfg.saved[i].raftstate)
 	}
 
 	rf := cfg.rafts[i]
