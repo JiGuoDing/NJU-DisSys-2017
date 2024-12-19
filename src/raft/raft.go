@@ -187,23 +187,35 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	reply.ConflictTerm = -1
 
 	// follower的Term大于leader的Term，则判断follower是否是断连后重连
+	// 或者是否是leader断连又重连后，发来的RPC
 	if rf.CurrentTerm > args.Term {
 		fmt.Printf("server %d in term %d received AppendEntries from old term %d\n", rf.me, rf.CurrentTerm, args.Term)
 		// 如果follower的Logs长度小于PrevLogIndex，则进入该Term
 		println(len(rf.Logs), args.LeaderCommit)
+		// 判断自己是断连后重连的follower
 		if len(rf.Logs) < args.LeaderCommit {
+			// 自己加入新Term
 			rf.Down2Follower4NewTerm(args.Term)
 			rf.VotedFor = args.LeaderID
 		}
+		// 判断为老leader发送的RPC
+		if args.LeaderCommit < rf.CommitIndex {
+			// 指示leader加入新Term
+			reply.ConflictIndex = -2
+			reply.ConflictTerm = -2
+		}
+
 		reply.Success = false
+		// reply.ConflictIndex = -2指示发送该RPC的leader加入新的Term
 		return
 	}
 
-	// 接收到AppendEntry的服务器的Term小于等于发送AppendEntry的leader的Term，则加入新的Term
+	// follower的Term小于leader的Term，则加入新的Term
 	// 或者同一任期的心跳来自的leader与当前server的VotedFor不同，则更改为新的leader
 	if rf.CurrentTerm < args.Term || rf.VotedFor != args.LeaderID {
 		rf.Down2Follower4NewTerm(args.Term)
 		rf.VotedFor = args.LeaderID
+		return
 	}
 
 	// 该AppendLogEntries RPC包含要追加的日志条目
@@ -218,13 +230,14 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 			return
 		}
 
-		// follower中没有匹配PrevLogIndex和PrevLogTerm的日志条目，不一致
+		// follower的Logs中没有匹配PrevLogIndex和PrevLogTerm的日志条目
 		if !entryExistInLogEntries(args.PrevLogIndex, args.PrevLogTerm, rf.Logs) {
 			reply.Success = false
-			// follower中有匹配PrevLogIndex和PrevLogTerm的日志条目，但Term不同
+			// follower的Logs中有匹配PrevLogIndex和PrevLogTerm的日志条目，但Term不同
 			// 这种情况下需要丢弃旧Term未提交的日志条目
 			if conflictTerm := indexExistInLogEntries(args.PrevLogIndex, rf.Logs); conflictTerm != -1 {
 				rf.Logs = rf.Logs[:args.PrevLogIndex]
+				fmt.Printf("\nserver %d repair Logs to %v\n", rf.me, rf.Logs)
 				// repairedLogs = append(repairedLogs, args.Entries...)
 				return
 			}
@@ -241,6 +254,36 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		truncatedLogs := rf.Logs[:args.PrevLogIndex+1]
 		truncatedLogs = append(truncatedLogs, args.Entries...)
 		rf.Logs = truncatedLogs
+		fmt.Printf("server %d update Logs to %v\n", rf.me, rf.Logs)
+	} else {
+		// RPC包含的Entries为空
+		// 检查follower的Logs是否与leader的Logs同步
+
+		// PrevLogIndex大于follower的日志长度，肯定不一致
+		if args.PrevLogIndex > len(rf.Logs) {
+			reply.Success = false
+			reply.ConflictIndex = rf.Logs[len(rf.Logs)-1].Index
+			reply.ConflictTerm = rf.Logs[len(rf.Logs)-1].Term
+			return
+		}
+
+		// follower的Logs中没有匹配PrevLogIndex和PrevLogTerm的日志条目
+		if !entryExistInLogEntries(args.PrevLogIndex, args.PrevLogTerm, rf.Logs) {
+			reply.Success = false
+			// follower的Logs中有匹配PrevLogIndex和PrevLogTerm的日志条目，但Term不同
+			// 这种情况下需要丢弃旧Term未提交的日志条目
+			if conflictTerm := indexExistInLogEntries(args.PrevLogIndex, rf.Logs); conflictTerm != -1 {
+				rf.Logs = rf.Logs[:args.PrevLogIndex]
+				fmt.Printf("\nserver %d repair Logs to %v\n", rf.me, rf.Logs)
+				// repairedLogs = append(repairedLogs, args.Entries...)
+				return
+			}
+
+			// 这种情况下希望的是leader逐个向前回溯NextIndex
+			reply.ConflictIndex = 1
+			reply.ConflictTerm = -1
+			return
+		}
 	}
 
 	// follower判断是否要提交日志条目
@@ -456,13 +499,14 @@ func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 
 	fmt.Println(rf.VotedFor, args.CandidateID)
 	// 为该server投票
-	if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
-		rf.VotedFor = args.CandidateID
-		fmt.Printf("server %d votes for server %d\n", rf.me, args.CandidateID)
-		reply.VoteGranted = true
-		rf.Role = follower
-		rf.TimeStamp = time.Now()
-	}
+	// TODO 修改投票条件
+	// if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
+	rf.VotedFor = args.CandidateID
+	fmt.Printf("server %d votes for server %d\n", rf.me, args.CandidateID)
+	reply.VoteGranted = true
+	rf.Role = follower
+	rf.TimeStamp = time.Now()
+	// }
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -861,41 +905,51 @@ func (rf *Raft) HeartBeat() {
 				return
 			}
 
-			// TODO
-			if len(aeArgs.Entries) != 0 {
-				// 有冲突就处理冲突
-				if !aeReply.Success {
-					// 防止NextIndex[]更新过快变为0
-					rf.NextIndex[idx] = max(1, rf.NextIndex[idx]-1)
-					return
+			// 该AppendEntries RPC是心跳测活
+			// if len(aeArgs.Entries) == 0 {
+			// 	if !aeReply.Success {
+			// 		rf.NextIndex[idx] = max(1, rf.NextIndex[idx]-1)
+			// 	}
+			// }
+
+			// 该AppendEntries RPC 包含需要追加的日志条目
+			// 有冲突就处理冲突
+			if !aeReply.Success {
+				// 目标follower的Term比自己大
+				if aeReply.ConflictIndex == -2 {
+					fmt.Printf("%d is entering a new Term\n", rf.me)
+					rf.Down2Follower4NewTerm(aeReply.Term)
+				}
+				// 防止NextIndex[]更新过快变为0
+				rf.NextIndex[idx] = max(1, rf.NextIndex[idx]-1)
+				return
+			}
+
+			// 没有冲突
+			// AppendEntries成功
+			// fmt.Printf("rf.NextIndex[%d]: %d, len(aeArgs.Entries): %d\n", idx, rf.NextIndex[idx], len(aeArgs.Entries))
+			expectedMatchIdx := rf.MatchIndex[rf.me]
+			// 更新leader储存的followers的信息
+			rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
+			rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
+
+			// TODO 判断是否更新CommitIndex
+			// If there exists an N such that N > commitIndex, a majority
+			// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+			// set commitIndex = N
+
+			for _, log := range rf.Logs[rf.CommitIndex+1:] {
+				replica_cnt := 0
+				for i := 0; i < len(rf.peers); i++ {
+					if rf.MatchIndex[i] >= log.Index {
+						replica_cnt++
+					}
 				}
 
-				// 没有冲突
-				// AppendEntries成功
-				// fmt.Printf("rf.NextIndex[%d]: %d, len(aeArgs.Entries): %d\n", idx, rf.NextIndex[idx], len(aeArgs.Entries))
-				expectedMatchIdx := rf.MatchIndex[rf.me]
-				// 更新leader储存的followers的信息
-				rf.MatchIndex[idx] = max(rf.MatchIndex[idx], expectedMatchIdx)
-				rf.NextIndex[idx] = rf.MatchIndex[idx] + 1
-
-				// TODO 判断是否更新CommitIndex
-				// If there exists an N such that N > commitIndex, a majority
-				// of matchIndex[i] ≥ N, and log[N].term == currentTerm:
-				// set commitIndex = N
-
-				for _, log := range rf.Logs[rf.CommitIndex+1:] {
-					replica_cnt := 0
-					for i := 0; i < len(rf.peers); i++ {
-						if rf.MatchIndex[i] >= log.Index {
-							replica_cnt++
-						}
-					}
-
-					if replica_cnt > len(rf.peers)/2 {
-						rf.CommitIndex = log.Index
-						fmt.Printf("leader提交索引为 %d 的日志\n", rf.CommitIndex)
-						rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
-					}
+				if replica_cnt > len(rf.peers)/2 {
+					rf.CommitIndex = log.Index
+					fmt.Printf("leader提交索引为 %d 的日志\n", rf.CommitIndex)
+					rf.Apply(rf.CommitIndex, rf.Logs[rf.CommitIndex].Command)
 				}
 			}
 		}(i)
@@ -907,6 +961,7 @@ func (rf *Raft) HeartBeat() {
 func (rf *Raft) Down2Follower4NewTerm(NewTerm int) {
 	rf.CurrentTerm = NewTerm
 	rf.Role = follower
+	rf.VotedFor = -1
 	rf.VoteCnt = 0
 	rf.TimeStamp = time.Now()
 	fmt.Printf("server %d joins term %d as follower\n", rf.me, NewTerm)
