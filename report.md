@@ -160,7 +160,7 @@ type AppendEntriesReply struct {
 >
 > 进入日志复制过程，首先为集群中的每一个*follower*开一个协程进行日志追加过程，接着根据 `NextIndex` 构造日志追加的参数 `aeArgs`。
 >
-> 如果*leader*的最后一个日志条目的索引大于NextIndex中该目标*follower$_t$*对应的日志索引，说明有新的日志条目需要复制给该*follower*。将*leader*的日志中索引从NextIndex[$t$]开始的日志条目切片作为*RPC*参数之一。如果没有要复制的日志条目，则*RPC*中对应的参数设置为空切片。
+> 如果*leader*的最后一个日志条目的索引大于NextIndex中该目标*follower_t*对应的日志索引，说明有新的日志条目需要复制给该*follower*。将*leader*的日志中索引从NextIndex[t]开始的日志条目切片作为*RPC*参数之一。如果没有要复制的日志条目，则*RPC*中对应的参数设置为空切片。
 
 2.2.2 接受日志追加RPC并处理
 
@@ -169,13 +169,13 @@ type AppendEntriesReply struct {
 > *follower*接收到该*RPC*后，首先检查*leader*所处的任期，如果*leader*的任期小于自己的任期，则可能是两种情况：
 >
 > - 自己是断连一段时间后重新连接的*follower*，则直接加入该任期，等待*leader*再次发送日志追加RPC。
-> - *leader*是断连一段时间后重新连接的*leader*，则要提示该老*leader*加入新任期，此处使用的方法是置RPC响应中的$ConflictIndex=-2$。
+> - *leader*是断连一段时间后重新连接的*leader*，则要提示该老*leader*加入新任期，此处使用的方法是置RPC响应中的ConflictIndex=-2。
 >
-> 不论是上述哪种情况，都置RPC响应中的$Success=false$，并直接返回。
+> 不论是上述哪种情况，都置RPC响应中的Success=false，并直接返回。
 >
 > 如果*leader*的任期大于自己的任期，则加入该任期。
 >
-> 如果*leader*的任期与自己的任期相同，但是自己的$VotedFor != leader$的编号，则置$VotedFor=leader$的序号，并返回。
+> 如果*leader*的任期与自己的任期相同，但是自己的VotedFor != leader的编号，则置VotedFor=leader的序号，并返回。
 
 #### *日志追加*
 
@@ -195,7 +195,7 @@ type AppendEntriesReply struct {
 > 1. *follower*中有与*PrevLogIndex*匹配的日志，但是*PrevLogTerm*与*follower*中该日志的任期不同。这种情况下*follower*需要丢弃该日志条目及其之后的日志条目；
 > 2. *follower*中没有与*PrevLogIndex*匹配的日志，这种情况下*follower*需要*leader*逐个向前回溯NextIndex。
 >
-> 对于有冲突的情况，将置$Success=false$。
+> 对于有冲突的情况，将置Success=false。
 >
 > 对于要进行日志复制且没有冲突的情况下，直接进行日志复制。
 >
@@ -205,20 +205,60 @@ type AppendEntriesReply struct {
 >
 > 根据文中所述 "*If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)*"，判断是否需要提交日志。
 >
-> 最后的最后如果一切顺利执行，将置$Success=true$。
+> 最后的最后如果一切顺利执行，将置Success=true。
 
 2.2.3 处理日志追加结果
 
 > 首先判断是否有冲突。
 >
-> 如果有冲突，则判断ConflictIndex是否为-2，如果是，则说明该*leader*要加入新的任期。如果ConflictIndex不为-2，则置$NextIndex[t] = max(1, rf.NextIndex[t])$，防止*NextIndex*更新过快小于1。直接返回。
+> 如果有冲突，则判断ConflictIndex是否为-2，如果是，则说明该*leader*要加入新的任期，加入后直接返回。如果ConflictIndex不为-2，则置NextIndex[t] = max(1, rf.NextIndex[t])，防止*NextIndex*更新过快小于1。直接返回。
 >
 > 如果没有冲突，则更新MatchIndex和NextIndex的值。
 >
 > 最后判断是否有日志可以提交，即按文中"*If there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N, and log[N].term == currentTerm: set commitIndex = N*"来判断是否有日志可以提交并*Apply*。
+
+### ***2.3 持久化保存状态***
+
+***持久化状态***
+
+```go
+type PersistentState struct {
+ CurrentTerm int
+ VotedFor    int
+ Logs        []LogEntry
+}
+```
+
+#### 使用 `gob` 库来将部分状态持久化保存
+
+- ##### 保存状态
+
+> 首先创建一个字节缓冲区（bytes.buffer），再用`gob`创建一个编码器，将一个*PersistentState*实例编码进字节缓冲区中，再将该字节缓冲区转换为字节切片，最后调用 `persister.SaveRaftState(data)` 方法保存该字节切片。
+
+- ##### 读取状态
+
+> 用传入的字节切片创建一个字节缓冲区，接着用 `gob` 创建一个解码器，将字节缓冲区解码为一个*PersistentState*实例。最后用该*PersistentState*实例给*raft*实例赋值。
 
 ## 3-实验结果
 
 ### 测试结果图
 
 ![测试结果](./results/result.png)
+
+## 4-总结
+
+本次实验让我对 `Raft` 一致性算法的原理有了更深入的认识。
+在完成这次实验的过程中，遇到了不少困难，但大多数都解决了。
+
+由于使用的不是 `time.Timer` 计时器而是 `for` 循环加时间戳的形式来判断是否达到 `Timeout`，
+因此时间戳的更新时机很关键。
+
+在设计如何处理选举和日志复制过程的RPC请求与响应时，不仅要考虑判断条件如何设置，
+还要考虑各种判断的先后关系，一开始逻辑混乱，经常出现莫名其妙的错误，
+但在仔细阅读了论文后，根据论文的详细描述，最终还是能将逻辑理清并实现两类RPC。
+
+在使用并发编程也就是使用*goroutine*时，加深了我对 **锁** 的使用的认识，在一个项目中，
+要么完全细粒度地使用锁，要么完全粗粒度地使用锁，如果混合使用很容易导致死锁。
+
+事实上，我在本次实验中实现的 `raft` 一致性算法并不能保证100%地稳定，
+由于对 `raft` 机制的原理理解地不够透彻，应该还存在一些未发现的漏洞。
